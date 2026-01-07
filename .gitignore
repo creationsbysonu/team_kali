@@ -105,6 +105,9 @@ venv.bak/
 *.swp
 *.swo
 
+# GitHub Copilot instructions (local only)
+.github/
+
 # Database
 *.sqlite3
 
