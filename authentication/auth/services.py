@@ -19,11 +19,27 @@ class AuthenticationService:
     """Service class to handle authentication-related business logic for Ministry Users & Super Admin (Web App)"""
     
     @staticmethod
-    def login(email, password, device_info=None, request_meta=None, request=None):
+    def login(email, password, device_info=None, request_meta=None, request=None, 
+              place_slug=None, ministry_slug=None, service_slug=None):
         """
         Handle user login with email and password.
-        This is for MINISTRY USERS and SUPER ADMIN only (Web App).
+        This is for MINISTRY ADMIN, STAFF and SUPER ADMIN only (Web App).
         Citizens should use OTP authentication (Flutter App).
+        
+        Login Types:
+        1. Super Admin: No place/ministry/service needed
+        2. Ministry Admin: place_slug + ministry_slug required
+        3. Staff: place_slug + ministry_slug + service_slug required
+        
+        Args:
+            email: User email
+            password: User password
+            device_info: Optional device information
+            request_meta: Request metadata for logging
+            request: HTTP request object
+            place_slug: Place slug for ministry/staff login
+            ministry_slug: Ministry slug for ministry/staff login
+            service_slug: Service slug for staff login only
         """
         if not email or not password:
             return False, {"success": False, "error": "Email and password are required."}, 400
@@ -126,23 +142,151 @@ class AuthenticationService:
             if request_meta:
                 logger.info(f"[auth] Login successful for user: {user.email} from IP: {request_meta.get('REMOTE_ADDR')}")
             
-            # Get tenant info for staff/admin users
-            tenant_data = None
-            if user.user_type in ['staff', 'admin']:
+            # Validate login context (ministry vs super admin portal)
+            ministry_data = None
+            place_data = None
+            service_data = None
+            
+            # CASE 1: Staff login (place_slug + ministry_slug + service_slug)
+            if place_slug and ministry_slug and service_slug:
+                # Only staff can login to service
+                if user.user_type != CustomUser.UserType.STAFF:
+                    logger.warning(f"[auth] Non-staff tried service login: {email}")
+                    return False, {
+                        "success": False,
+                        "error": "Only staff accounts can login to services."
+                    }, 403
+                
+                # Validate place, ministry, service and staff assignment
                 try:
-                    from tenants.models import TenantMember
-                    membership = TenantMember.objects.filter(
-                        user=user, is_active=True
-                    ).select_related('tenant').first()
-                    if membership:
-                        tenant_data = {
-                            'id': str(membership.tenant.id),
-                            'name': membership.tenant.name,
-                            'slug': membership.tenant.slug,
-                            'role': membership.role,
-                        }
-                except Exception as tenant_error:
-                    logger.warning(f"[auth] Failed to fetch tenant info: {str(tenant_error)}")
+                    from places.models import Place
+                    from ministry.models import Ministry
+                    from services.models import Service, ServiceStaff
+                    
+                    # Verify place
+                    place = Place.objects.filter(slug=place_slug, is_active=True).first()
+                    if not place:
+                        return False, {"success": False, "error": "Place not found."}, 404
+                    
+                    # Verify ministry in this place
+                    ministry = Ministry.objects.filter(
+                        place=place,
+                        slug=ministry_slug,
+                        status=Ministry.Status.ACTIVE
+                    ).first()
+                    if not ministry:
+                        return False, {"success": False, "error": "Ministry not found."}, 404
+                    
+                    if ministry.is_deleted:
+                        return False, {"success": False, "error": "Ministry has been deleted."}, 403
+                    
+                    # Verify service in this ministry
+                    service = Service.objects.filter(
+                        ministry=ministry,
+                        slug=service_slug,
+                        is_active=True,
+                        is_published=True
+                    ).first()
+                    if not service:
+                        return False, {"success": False, "error": "Service not found."}, 404
+                    
+                    # Verify staff is assigned to this service
+                    staff_assignment = ServiceStaff.objects.filter(
+                        service=service,
+                        user=user,
+                        is_active=True
+                    ).first()
+                    if not staff_assignment:
+                        return False, {
+                            "success": False,
+                            "error": "You are not assigned to this service."
+                        }, 403
+                    
+                    place_data = {'id': str(place.id), 'name': place.name, 'slug': place.slug}
+                    ministry_data = {'id': str(ministry.id), 'name': ministry.name, 'slug': ministry.slug}
+                    service_data = {'id': str(service.id), 'name': service.name, 'slug': service.slug}
+                    
+                    logger.info(f"[auth] Staff login success: {email} -> {place.name}/{ministry.name}/{service.name}")
+                    
+                except Exception as e:
+                    logger.error(f"[auth] Staff login validation error: {str(e)}")
+                    return False, {"success": False, "error": "Failed to validate staff assignment."}, 500
+            
+            # CASE 2: Ministry Admin login (place_slug + ministry_slug)
+            elif place_slug and ministry_slug:
+                # Only admin can login to ministry
+                if user.user_type != CustomUser.UserType.ADMIN:
+                    if user.user_type == CustomUser.UserType.SUPER_ADMIN:
+                        return False, {
+                            "success": False,
+                            "error": "Super admin accounts must login through the admin portal."
+                        }, 403
+                    elif user.user_type == CustomUser.UserType.STAFF:
+                        return False, {
+                            "success": False,
+                            "error": "Staff must login through the service portal."
+                        }, 403
+                    else:
+                        return False, {"success": False, "error": "Invalid credentials."}, 403
+                
+                try:
+                    from places.models import Place
+                    from ministry.models import MinistryMember, Ministry
+                    
+                    # Verify place
+                    place = Place.objects.filter(slug=place_slug, is_active=True).first()
+                    if not place:
+                        return False, {"success": False, "error": "Place not found."}, 404
+                    
+                    # Verify ministry in this place
+                    ministry = Ministry.objects.filter(
+                        place=place,
+                        slug=ministry_slug,
+                        status=Ministry.Status.ACTIVE
+                    ).first()
+                    if not ministry:
+                        return False, {"success": False, "error": "Ministry not found."}, 404
+                    
+                    if ministry.is_deleted:
+                        return False, {"success": False, "error": "Ministry has been deleted."}, 403
+                    
+                    if ministry.status == Ministry.Status.SUSPENDED:
+                        return False, {"success": False, "error": "Ministry has been suspended."}, 403
+                    
+                    # Verify user is admin of this ministry
+                    membership = MinistryMember.objects.filter(
+                        user=user,
+                        ministry=ministry,
+                        is_active=True
+                    ).first()
+                    
+                    if not membership:
+                        return False, {
+                            "success": False,
+                            "error": "You are not an admin of this ministry."
+                        }, 403
+                    
+                    place_data = {'id': str(place.id), 'name': place.name, 'slug': place.slug}
+                    ministry_data = {'id': str(ministry.id), 'name': ministry.name, 'slug': ministry.slug}
+                    
+                    logger.info(f"[auth] Ministry admin login success: {email} -> {place.name}/{ministry.name}")
+                    
+                except Exception as e:
+                    logger.error(f"[auth] Ministry validation error: {str(e)}")
+                    return False, {"success": False, "error": "Failed to validate ministry membership."}, 500
+            
+            # CASE 3: Super Admin portal login (no place/ministry/service)
+            else:
+                if user.user_type != CustomUser.UserType.SUPER_ADMIN:
+                    if user.user_type in [CustomUser.UserType.STAFF, CustomUser.UserType.ADMIN]:
+                        return False, {
+                            "success": False,
+                            "error": "Please login through your ministry or service portal."
+                        }, 403
+                    else:
+                        return False, {"success": False, "error": "Invalid login credentials."}, 403
+                
+                logger.info(f"[auth] Super admin login success: {email}")
             
             response_data = {
                 'user': serializer.data,
@@ -151,9 +295,13 @@ class AuthenticationService:
                 'verification_needed': not user.is_verified and settings.REQUIRE_EMAIL_VERIFICATION
             }
             
-            # Add tenant info if available
-            if tenant_data:
-                response_data['tenant'] = tenant_data
+            # Add context info based on login type
+            if place_data:
+                response_data['place'] = place_data
+            if ministry_data:
+                response_data['ministry'] = ministry_data
+            if service_data:
+                response_data['service'] = service_data
             
             return True, {
                 "success": True,
@@ -205,7 +353,8 @@ class AuthenticationService:
         """Validate a token and check if it belongs to the user"""
         is_valid, user_id, token_type = TokenManager.validate_token(token)
         
-        if not is_valid or user_id != user.id:
+        # Compare as strings since JWT stores user_id as string
+        if not is_valid or str(user_id) != str(user.id):
             logger.warning(f"Token validation failed: expected user {user.id}, got {user_id}")
             return False, {"success": False, "error": "Token validation failed"}, 401
         
@@ -223,7 +372,7 @@ class AuthenticationService:
         
         
     @staticmethod
-    def logout(user, refresh_token =None):
+    def logout(user, refresh_token=None):
         """Handle user logout, invalidating tokens as needed"""
         if refresh_token:
             try: 
@@ -234,8 +383,9 @@ class AuthenticationService:
                     logger.info(f"Token blacklisted during logout: {jti}")
             except Exception as e:
                 logger.warning(f"Error blacklisting token during logout: {str(e)}")
-                
-        logger.info(f"User logged out: {user.id}")
+        
+        user_info = user.email if user else "anonymous"
+        logger.info(f"User logged out: {user_info}")
         return True, {
             "success": True, 
             "message": "Successfully logged out"

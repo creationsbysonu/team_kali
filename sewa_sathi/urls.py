@@ -6,7 +6,9 @@ from django.conf.urls.static import static
 urlpatterns = [
     path('admin/', admin.site.urls),
     path('auth/', include('authentication.urls', namespace='authentication')),
-    path('tenants/', include('tenants.urls', namespace='tenants')),
+    path('places/', include('places.urls', namespace='places')),
+    path('ministry/', include('ministry.urls', namespace='ministry')),
+    path('staff/', include('staff.urls', namespace='staff')),
 ]
 
 # Serve media files in development

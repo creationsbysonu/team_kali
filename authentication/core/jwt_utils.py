@@ -27,9 +27,9 @@ class TokenManager:
             # Create unique JTI (JWT ID) for better tracking
             jti = str(uuid.uuid4())
             
-            # Add custome claims with security considerations. 
+            # Add custom claims with security considerations
             refresh['jti'] = jti 
-            refresh['username'] = user.username
+            refresh['user_type'] = user.user_type
             refresh['is_staff'] = user.is_staff
             refresh['email'] = user.email
             refresh['is_verified'] = user.is_verified
@@ -124,7 +124,7 @@ class TokenManager:
             
             exp = decoded.get('exp', 0)
             if exp < time.time():
-                logger.debu(f"Token expired at {datetime.fromtimestamp(exp).isoformat()}")
+                logger.debug(f"Token expired at {datetime.fromtimestamp(exp).isoformat()}")
                 return False, None, None
             return True, user_id, token_type
         

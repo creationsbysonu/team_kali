@@ -27,10 +27,16 @@ INSTALLED_APPS = [
     # Third party apps
     'corsheaders',
     'rest_framework',
+    'cloudinary_storage',
+    'cloudinary',
     
     # Local apps
+    'core',
     'authentication',
-    'tenants',
+    'places',   # Decentralized locations (Kathmandu, Biratnagar, etc.)
+    'ministry',  # Ministries belong to Places
+    'services',  # Services belong to Ministries
+    'staff',     # Staff belong to Services (created by Ministry Admins)
 ]
 
 MIDDLEWARE = [
@@ -40,7 +46,7 @@ MIDDLEWARE = [
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',
     'django.contrib.auth.middleware.AuthenticationMiddleware',
-    'tenants.core.middleware.TenantMiddleware',  # Multi-tenancy middleware
+    'ministry.core.middleware.MinistryMiddleware',  # Multi-tenancy middleware
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
 ]
@@ -108,6 +114,20 @@ AUTH_PASSWORD_VALIDATORS = [
         'NAME': 'django.contrib.auth.password_validation.NumericPasswordValidator',
     },
 ]
+
+# Cloudinary configuration
+CLOUDINARY_STORAGE = {
+    'CLOUD_NAME': config('CLOUDINARY_CLOUD_NAME'),
+    'API_KEY': config('CLOUDINARY_API_KEY'),
+    'API_SECRET': config('CLOUDINARY_API_SECRET'),
+}
+
+# Use Cloudinary for media files
+DEFAULT_FILE_STORAGE = 'cloudinary_storage.storage.MediaCloudinaryStorage'
+
+# Media settings
+MEDIA_URL = '/media/'
+MEDIA_ROOT = os.path.join(BASE_DIR, 'media')
 
 
 # Internationalization
