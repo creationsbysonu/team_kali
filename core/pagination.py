@@ -300,7 +300,7 @@ class CursorPagination(BasePagination):
             model=self.cache_model_name or 'default',
             identifier='count',
             params={'base': 'true'},
-            tenant_id=getattr(request, 'tenant_id', None)
+            ministry_id=getattr(request, 'ministry_id', None)
         )
         
         def get_count():

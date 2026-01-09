@@ -133,7 +133,7 @@ class CacheMixin:
             identifier=resolved_action,
             params=dict(request.query_params),
             user_id=str(request.user.id) if self.cache_user_specific and request.user.is_authenticated else None,
-            tenant_id=getattr(request, 'tenant_id', None) if self.cache_tenant_aware else None
+            ministry_id=getattr(request, 'ministry_id', None) if self.cache_tenant_aware else None
         )
     
     def _get_cache_ttl(self, action: Optional[str] = None) -> int:
@@ -164,7 +164,7 @@ class CacheMixin:
         cache_key = CacheKeyBuilder.build(
             model=self.cache_model_name or 'default',
             identifier=str(pk) if pk else 'unknown',
-            tenant_id=getattr(request, 'tenant_id', None) if self.cache_tenant_aware else None
+            ministry_id=getattr(request, 'ministry_id', None) if self.cache_tenant_aware else None
         )
         
         cached = cache.get(cache_key)
@@ -185,10 +185,10 @@ class CacheMixin:
         response = super().create(request, *args, **kwargs)  # type: ignore[misc]
         
         if response.status_code == 201:
-            tenant_id = getattr(request, 'tenant_id', None) if self.cache_tenant_aware else None
+            ministry_id = getattr(request, 'ministry_id', None) if self.cache_tenant_aware else None
             CacheInvalidator.on_create(
                 model=self.cache_model_name or 'default',
-                tenant_id=str(tenant_id) if tenant_id else None
+                ministry_id=str(ministry_id) if ministry_id else None
             )
         
         return response
@@ -199,11 +199,11 @@ class CacheMixin:
         
         if response.status_code == 200:
             pk = kwargs.get('pk')
-            tenant_id = getattr(request, 'tenant_id', None) if self.cache_tenant_aware else None
+            ministry_id = getattr(request, 'ministry_id', None) if self.cache_tenant_aware else None
             CacheInvalidator.on_update(
                 model=self.cache_model_name or 'default',
                 object_id=str(pk) if pk else None,
-                tenant_id=str(tenant_id) if tenant_id else None
+                ministry_id=str(ministry_id) if ministry_id else None
             )
         
         return response
@@ -214,11 +214,11 @@ class CacheMixin:
         
         if response.status_code == 200:
             pk = kwargs.get('pk')
-            tenant_id = getattr(request, 'tenant_id', None) if self.cache_tenant_aware else None
+            ministry_id = getattr(request, 'ministry_id', None) if self.cache_tenant_aware else None
             CacheInvalidator.on_update(
                 model=self.cache_model_name or 'default',
                 object_id=str(pk) if pk else None,
-                tenant_id=str(tenant_id) if tenant_id else None
+                ministry_id=str(ministry_id) if ministry_id else None
             )
         
         return response
@@ -229,11 +229,11 @@ class CacheMixin:
         response = super().destroy(request, *args, **kwargs)  # type: ignore[misc]
         
         if response.status_code == 204:
-            tenant_id = getattr(request, 'tenant_id', None) if self.cache_tenant_aware else None
+            ministry_id = getattr(request, 'ministry_id', None) if self.cache_tenant_aware else None
             CacheInvalidator.on_delete(
                 model=self.cache_model_name or 'default',
                 object_id=str(pk) if pk else None,
-                tenant_id=str(tenant_id) if tenant_id else None
+                ministry_id=str(ministry_id) if ministry_id else None
             )
         
         return response
@@ -296,7 +296,7 @@ class PaginatedCacheMixin(CacheMixin):
         # Include pagination params
         params = dict(request.query_params)
         cursor_value = params.get('cursor')
-        tenant_id = getattr(request, 'tenant_id', None) if self.cache_tenant_aware else None
+        ministry_id = getattr(request, 'ministry_id', None) if self.cache_tenant_aware else None
         
         return CacheKeyBuilder.build_pagination_key(
             model=model,
@@ -304,7 +304,7 @@ class PaginatedCacheMixin(CacheMixin):
             page_size=int(params.get('page_size', 20)),
             filters={k: v for k, v in params.items() if k not in ['cursor', 'page_size']},
             user_id=str(request.user.id) if self.cache_user_specific and request.user.is_authenticated else None,
-            tenant_id=str(tenant_id) if tenant_id else None
+            ministry_id=str(ministry_id) if ministry_id else None
         )
 
 
