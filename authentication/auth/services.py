@@ -121,16 +121,7 @@ class AuthenticationService:
                     "error": "User data serialization failed"
                 }, 500
             
-            # Generate tokens
-            try:
-                tokens = TokenManager.generate_tokens(user)
-            except Exception as token_error:
-                logger.error(f"[auth] Token generation error: {str(token_error)}")
-                return False, {
-                    "success": False,
-                    "error": "Token generation failed"
-                }, 500
-            
+
             # Update last login
             try:
                 user.last_login = timezone.now()
@@ -146,6 +137,9 @@ class AuthenticationService:
             ministry_data = None
             place_data = None
             service_data = None
+            ministry_id = None
+            place_id = None
+            service_id = None
             
             # CASE 1: Staff login (place_slug + ministry_slug + service_slug)
             if place_slug and ministry_slug and service_slug:
@@ -205,6 +199,11 @@ class AuthenticationService:
                     place_data = {'id': str(place.id), 'name': place.name, 'slug': place.slug}
                     ministry_data = {'id': str(ministry.id), 'name': ministry.name, 'slug': ministry.slug}
                     service_data = {'id': str(service.id), 'name': service.name, 'slug': service.slug}
+                    
+                    # Set IDs for token generation
+                    place_id = place.id
+                    ministry_id = ministry.id
+                    service_id = service.id
                     
                     logger.info(f"[auth] Staff login success: {email} -> {place.name}/{ministry.name}/{service.name}")
                     
@@ -269,6 +268,10 @@ class AuthenticationService:
                     place_data = {'id': str(place.id), 'name': place.name, 'slug': place.slug}
                     ministry_data = {'id': str(ministry.id), 'name': ministry.name, 'slug': ministry.slug}
                     
+                    # Set IDs for token generation (done at the end)
+                    place_id = place.id
+                    ministry_id = ministry.id
+                    
                     logger.info(f"[auth] Ministry admin login success: {email} -> {place.name}/{ministry.name}")
                     
                 except Exception as e:
@@ -287,6 +290,21 @@ class AuthenticationService:
                         return False, {"success": False, "error": "Invalid login credentials."}, 403
                 
                 logger.info(f"[auth] Super admin login success: {email}")
+            
+            # Generate tokens with context (after all validations)
+            try:
+                tokens = TokenManager.generate_tokens(
+                    user,
+                    ministry_id=ministry_id,
+                    place_id=place_id,
+                    service_id=service_id
+                )
+            except Exception as token_error:
+                logger.error(f"[auth] Token generation error: {str(token_error)}")
+                return False, {
+                    "success": False,
+                    "error": "Token generation failed"
+                }, 500
             
             response_data = {
                 'user': serializer.data,

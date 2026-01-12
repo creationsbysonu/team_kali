@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
     retry_backoff_max=60,
     name="authentication.otp.send_otp_email"
 )
-def send_otp_email_task(self, email: str, otp: str):
+def send_otp_email(self, email: str, otp: str):
     """
     Celery task to send OTP email.
     

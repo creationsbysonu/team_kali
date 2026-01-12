@@ -19,7 +19,7 @@ class TokenManager:
         return get_redis_connection("default") 
     
     @staticmethod
-    def generate_tokens(user):
+    def generate_tokens(user, ministry_id=None, place_id=None, service_id=None):
         """Generate secure access and refresh tokens with enhanced claims and security"""
         try:
             refresh = RefreshToken.for_user(user)
@@ -35,10 +35,26 @@ class TokenManager:
             refresh['is_verified'] = user.is_verified
             refresh['type'] = 'refresh'
             
+            # Add context claims for ministry/place/service
+            if ministry_id:
+                refresh['ministry_id'] = str(ministry_id)
+            if place_id:
+                refresh['place_id'] = str(place_id)
+            if service_id:
+                refresh['service_id'] = str(service_id)
+            
             # set up different claims for access token
             access_token = refresh.access_token
             access_token['type'] = 'access'
             access_token['jti'] = str(uuid.uuid4())
+            
+            # Copy context claims to access token
+            if ministry_id:
+                access_token['ministry_id'] = str(ministry_id)
+            if place_id:
+                access_token['place_id'] = str(place_id)
+            if service_id:
+                access_token['service_id'] = str(service_id)
             
             access_expiry = settings.SIMPLE_JWT.get('ACCESS_TOKEN_LIFETIME', timedelta(minutes=15))
             refresh_expiry = settings.SIMPLE_JWT.get('REFRESH_TOKEN_LIFETIME', timedelta(days = 14))
@@ -60,44 +76,217 @@ class TokenManager:
         
     @staticmethod
     def refresh_tokens(refresh_token):
-        """Refresh tokens with validation and optional rotation"""
-        try :
-            token = RefreshToken(refresh_token)
+        """
+        Refresh tokens with validation and optional rotation - supports all user types.
+        
+        Args:
+            refresh_token: The refresh token to use
             
+        Returns:
+            dict: New tokens with access_token, refresh_token, token_type, expires_in
+            
+        Raises:
+            TokenError: If token is invalid, blacklisted, or user not found
+        """
+        if not refresh_token:
+            raise TokenError("Refresh token is required")
+        
+        try:
+            token = RefreshToken(refresh_token)
+        except Exception as e:
+            logger.warning(f"[token] Invalid refresh token format: {str(e)}")
+            raise TokenError("Invalid refresh token format")
+        
+        try:
             jti = token.get('jti')
             
-            if not jti or TokenManager.is_token_blacklisted(jti):
-                logger.warning(f"Attempt to use blacklisted token with JTI: {jti}")
+            if not jti:
+                logger.warning("[token] Refresh token missing JTI claim")
+                raise TokenError("Invalid token structure")
+            
+            if TokenManager.is_token_blacklisted(jti):
+                logger.warning(f"[token] Attempt to use blacklisted token: {jti[:8]}...")
                 raise TokenError("Token is blacklisted")
             
-            # Get user from token
+            # Get user details from token with validation
             user_id = token.get('user_id')
+            if not user_id:
+                logger.warning("[token] Refresh token missing user_id claim")
+                raise TokenError("Invalid token structure")
             
-            from authentication.models import CustomUser
+            user_type = token.get('user_type', 'citizen')  # Default for backward compatibility
             
-            try: 
-                user = CustomUser.objects.get(id = user_id)
+            # Handle different user types
+            if user_type == 'staff':
+                return TokenManager._refresh_staff_token(user_id, jti, token)
+            elif user_type == 'ministry':
+                return TokenManager._refresh_ministry_token(user_id, jti, token)
+            else:
+                return TokenManager._refresh_custom_user_token(user_id, jti, token)
                 
-            except CustomUser.DoesNotExist:
-                logger.warning(f"Token refresh attempted for non-existent user Id : {user_id}")
-                raise TokenError("Invalid token")
-            
-            if not user.is_active:
-                logger.warning(f"Token refresh attempted for inactive user: {user.email}")
-                TokenManager.blacklist_token(jti)
-                raise TokenError("user is inactive")
-            
-            if settings.SIMPLE_JWT.get('ROTATE_REFRESH_TOKENS', True):
-                TokenManager.blacklist_token(jti)
-                
-            # Generate new tokens
-            return TokenManager.generate_tokens(user)
-        except TokenError as e:
-            logger.warning(f"Token refresh error: {str(e)}")
+        except TokenError:
+            # Re-raise TokenError as-is
             raise
         except Exception as e:
-            logger.error(f"Unexpected error during token refresh : {str(e)}")
+            logger.error(f"[token] Unexpected error during token refresh: {type(e).__name__}: {str(e)}")
+            import traceback
+            logger.error(traceback.format_exc())
             raise TokenError(f"Token refresh failed: {str(e)}")
+    
+    @staticmethod
+    def _refresh_staff_token(user_id, jti, token):
+        """Refresh tokens for staff user"""
+        from ministry.models import StaffService
+        
+        try:
+            staff_service = StaffService.objects.select_related(
+                'ministry',
+                'ministry__place'
+            ).get(id=user_id)
+            
+            # Validate staff service is active
+            if not staff_service.is_active:
+                logger.warning(f"[token] Inactive staff service attempted token refresh: {user_id}")
+                TokenManager.blacklist_token(jti)
+                raise TokenError("Staff service is inactive")
+            
+            if staff_service.status != StaffService.Status.ACTIVE:
+                logger.warning(f"[token] Non-active staff service attempted refresh: {user_id} - {staff_service.status}")
+                TokenManager.blacklist_token(jti)
+                raise TokenError(f"Staff service is {staff_service.status}")
+            
+            # Validate ministry is still active
+            if staff_service.ministry.status != staff_service.ministry.Status.ACTIVE:
+                logger.warning(f"[token] Staff service belongs to inactive ministry: {user_id}")
+                TokenManager.blacklist_token(jti)
+                raise TokenError("Ministry is no longer active")
+                
+        except StaffService.DoesNotExist:
+            logger.warning(f"[token] Token refresh for non-existent staff: {user_id}")
+            raise TokenError("Staff service not found")
+        
+        # Blacklist old token if rotation enabled
+        if settings.SIMPLE_JWT.get('ROTATE_REFRESH_TOKENS', True):
+            TokenManager.blacklist_token(jti)
+        
+        # Generate new tokens with staff context
+        refresh = RefreshToken()
+        refresh['user_id'] = str(staff_service.id)
+        refresh['email'] = staff_service.email
+        refresh['user_type'] = 'staff'
+        refresh['staff_service_id'] = str(staff_service.id)
+        refresh['staff_name'] = staff_service.staff_name
+        refresh['service_name'] = staff_service.service_name
+        refresh['ministry_id'] = str(staff_service.ministry.id)
+        refresh['ministry_slug'] = staff_service.ministry.slug
+        refresh['place_id'] = str(staff_service.ministry.place.id)
+        refresh['place_slug'] = staff_service.ministry.place.slug
+        refresh['jti'] = str(uuid.uuid4())
+        
+        access = refresh.access_token
+        access['jti'] = str(uuid.uuid4())
+        
+        logger.debug(f"[token] Staff token refreshed: {staff_service.email}")
+        
+        return {
+            'access_token': str(access),
+            'refresh_token': str(refresh),
+            'token_type': 'Bearer',
+            'expires_in': 900,
+            'refresh_expires_in': 1209600,
+        }
+    
+    @staticmethod
+    def _refresh_ministry_token(user_id, jti, token):
+        """Refresh tokens for ministry user"""
+        from ministry.models import Ministry
+        
+        try:
+            ministry = Ministry.objects.select_related('place').get(id=user_id)
+            
+            # Validate ministry is active
+            if ministry.status != Ministry.Status.ACTIVE:
+                logger.warning(f"[token] Non-active ministry attempted refresh: {user_id} - {ministry.status}")
+                TokenManager.blacklist_token(jti)
+                raise TokenError(f"Ministry is {ministry.status}")
+            
+            # Check soft delete
+            if ministry.is_deleted:
+                logger.warning(f"[token] Deleted ministry attempted refresh: {user_id}")
+                TokenManager.blacklist_token(jti)
+                raise TokenError("Ministry has been deleted")
+            
+            # Validate place is active
+            if not ministry.place.is_active:
+                logger.warning(f"[token] Ministry belongs to inactive place: {user_id}")
+                TokenManager.blacklist_token(jti)
+                raise TokenError("Place is no longer active")
+                
+        except Ministry.DoesNotExist:
+            logger.warning(f"[token] Token refresh for non-existent ministry: {user_id}")
+            raise TokenError("Ministry not found")
+        
+        # Blacklist old token if rotation enabled
+        if settings.SIMPLE_JWT.get('ROTATE_REFRESH_TOKENS', True):
+            TokenManager.blacklist_token(jti)
+        
+        # Generate new tokens with ministry context
+        refresh = RefreshToken()
+        refresh['user_id'] = str(ministry.id)
+        refresh['email'] = ministry.email
+        refresh['user_type'] = 'ministry'
+        refresh['ministry_id'] = str(ministry.id)
+        refresh['ministry_slug'] = ministry.slug
+        refresh['place_id'] = str(ministry.place.id)
+        refresh['place_slug'] = ministry.place.slug
+        refresh['jti'] = str(uuid.uuid4())
+        
+        access = refresh.access_token
+        access['jti'] = str(uuid.uuid4())
+        
+        logger.debug(f"[token] Ministry token refreshed: {ministry.email}")
+        
+        return {
+            'access_token': str(access),
+            'refresh_token': str(refresh),
+            'token_type': 'Bearer',
+            'expires_in': 900,
+            'refresh_expires_in': 1209600,
+        }
+    
+    @staticmethod
+    def _refresh_custom_user_token(user_id, jti, token):
+        """Refresh tokens for CustomUser (citizens, admins, super admin)"""
+        from authentication.models import CustomUser
+        
+        try:
+            user = CustomUser.objects.get(id=user_id)
+        except CustomUser.DoesNotExist:
+            logger.warning(f"[token] Token refresh for non-existent user: {user_id}")
+            raise TokenError("User not found")
+        
+        if not user.is_active:
+            logger.warning(f"[token] Inactive user attempted token refresh: {user.email}")
+            TokenManager.blacklist_token(jti)
+            raise TokenError("User is inactive")
+        
+        # Blacklist old token if rotation enabled
+        if settings.SIMPLE_JWT.get('ROTATE_REFRESH_TOKENS', True):
+            TokenManager.blacklist_token(jti)
+        
+        # Generate new tokens with context from original token
+        ministry_id = token.get('ministry_id')
+        place_id = token.get('place_id')
+        service_id = token.get('service_id')
+        
+        logger.debug(f"[token] User token refreshed: {user.email}")
+        
+        return TokenManager.generate_tokens(
+            user,
+            ministry_id=ministry_id,
+            place_id=place_id,
+            service_id=service_id
+        )
         
         
     @staticmethod

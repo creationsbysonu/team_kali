@@ -1,8 +1,8 @@
 """
 Ministry Management Service
 
-Handles ministry self-management operations.
-For ministry admins to manage their own organization.
+Handles ministry self-management operations and staff service management.
+For ministry admins to manage their organization and staff services.
 """
 import logging
 import secrets
@@ -11,11 +11,14 @@ from django.db import transaction
 from django.core.cache import cache
 from django.utils import timezone
 
-from ministry.models import Ministry, MinistryMember, MinistryInvitation
+from ministry.models import Ministry, MinistryMember, MinistryInvitation, StaffService
 from ministry.serializers import (
     MinistrySerializer, 
     MinistryMemberSerializer,
-    MinistryInvitationSerializer
+    MinistryInvitationSerializer,
+    StaffServiceSerializer,
+    StaffServiceCreateSerializer,
+    StaffServiceUpdateSerializer
 )
 
 logger = logging.getLogger(__name__)
@@ -281,5 +284,323 @@ class MinistryManagementService:
         except MinistryInvitation.DoesNotExist:
             return False, {"success": False, "error": "Invitation not found"}, 404
         except Exception as e:
+            logger.error(f"[ministry:{ministry.slug}] Cancel invitation error: {str(e)}")
+            return False, {"success": False, "error": "Failed to cancel invitation"}, 500
+
+
+# ==================== Staff Service Management ====================
+
+class StaffServiceManagementService:
+    """
+    Service for Ministry Admin to manage Staff Services.
+    
+    Staff Services are login accounts for staff members.
+    Similar to how Super Admin manages Ministries, Ministry Admin manages Staff Services.
+    """
+    
+    @staticmethod
+    def get_list(ministry, request=None):
+        """
+        Get list of staff services for this ministry.
+        
+        Args:
+            ministry: Current ministry
+            request: HTTP request for context
+            
+        Returns:
+            tuple: (success, response_data, status_code)
+        """
+        try:
+            staff_services = StaffService.objects.filter(
+                ministry=ministry
+            ).order_by('-created_at')
+            
+            context = {'request': request} if request else {}
+            data = StaffServiceSerializer(staff_services, many=True, context=context).data
+            
+            logger.info(f"[ministry:{ministry.slug}] Listed {len(data)} staff services")
+            
+            return True, {
+                "success": True,
+                "data": data
+            }, 200
+            
+        except Exception as e:
+            logger.error(f"[ministry:{ministry.slug}] Staff services list error: {str(e)}")
+            return False, {
+                "success": False,
+                "error": "Failed to fetch staff services"
+            }, 500
+    
+    @staticmethod
+    def create(ministry, data, request=None):
+        """
+        Create a new staff service.
+        
+        Args:
+            ministry: Current ministry
+            data: Staff service data (service_name, service_logo, staff_name, staff_image, email, password)
+            request: HTTP request for context
+            
+        Returns:
+            tuple: (success, response_data, status_code)
+        """
+        try:
+            # Validate input
+            serializer = StaffServiceCreateSerializer(data=data)
+            if not serializer.is_valid():
+                return False, {
+                    "success": False,
+                    "error": "Validation failed",
+                    "details": serializer.errors
+                }, 400
+            
+            validated_data = serializer.validated_data  # type: ignore
+            
+            with transaction.atomic():
+                # Create staff service
+                staff_service = StaffService.objects.create(
+                    ministry=ministry,
+                    service_name=validated_data['service_name'],  # type: ignore
+                    service_logo=validated_data.get('service_logo'),  # type: ignore
+                    staff_name=validated_data['staff_name'],  # type: ignore
+                    staff_image=validated_data.get('staff_image'),  # type: ignore
+                    email=validated_data['email'],  # type: ignore
+                    status=StaffService.Status.ACTIVE,
+                    is_active=True
+                )
+                
+                # Hash password
+                staff_service.set_password(validated_data['password'])  # type: ignore
+                staff_service.save(update_fields=['password'])
+            
+            logger.info(f"[ministry:{ministry.slug}] Staff service created: {staff_service.service_name} - {staff_service.staff_name} ({staff_service.email})")
+            
+            context = {'request': request} if request else {}
+            return True, {
+                "success": True,
+                "data": StaffServiceSerializer(staff_service, context=context).data,
+                "message": "Staff service created successfully"
+            }, 201
+            
+        except Exception as e:
+            logger.error(f"[ministry:{ministry.slug}] Create staff service error: {str(e)}")
+            return False, {
+                "success": False,
+                "error": "Failed to create staff service"
+            }, 500
+    
+    @staticmethod
+    def get_details(ministry, staff_service_id, request=None):
+        """
+        Get staff service details.
+        
+        Args:
+            ministry: Current ministry
+            staff_service_id: UUID of staff service
+            request: HTTP request for context
+            
+        Returns:
+            tuple: (success, response_data, status_code)
+        """
+        try:
+            staff_service = StaffService.objects.get(
+                id=staff_service_id,
+                ministry=ministry
+            )
+            
+            context = {'request': request} if request else {}
+            data = StaffServiceSerializer(staff_service, context=context).data
+            
+            return True, {"success": True, "data": data}, 200
+            
+        except StaffService.DoesNotExist:
+            return False, {"success": False, "error": "Staff service not found"}, 404
+        except Exception as e:
+            logger.error(f"[ministry:{ministry.slug}] Staff service details error: {str(e)}")
+            return False, {"success": False, "error": "Failed to fetch details"}, 500
+    
+    @staticmethod
+    def update(ministry, staff_service_id, data, request=None):
+        """
+        Update staff service (service info, staff info, status).
+        
+        Args:
+            ministry: Current ministry
+            staff_service_id: UUID of staff service
+            data: Update data (service_name, service_logo, staff_name, staff_image, status, is_active)
+            request: HTTP request for context
+            
+        Returns:
+            tuple: (success, response_data, status_code)
+        """
+        try:
+            staff_service = StaffService.objects.get(
+                id=staff_service_id,
+                ministry=ministry
+            )
+            
+            # Validate input
+            serializer = StaffServiceUpdateSerializer(data=data)
+            if not serializer.is_valid():
+                return False, {
+                    "success": False,
+                    "error": "Validation failed",
+                    "details": serializer.errors
+                }, 400
+            
+            validated_data = serializer.validated_data  # type: ignore
+            
+            with transaction.atomic():
+                # Update allowed fields
+                if 'service_name' in validated_data:  # type: ignore
+                    staff_service.service_name = validated_data['service_name']  # type: ignore
+                if 'service_logo' in validated_data:  # type: ignore
+                    staff_service.service_logo = validated_data['service_logo']  # type: ignore
+                if 'staff_name' in validated_data:  # type: ignore
+                    staff_service.staff_name = validated_data['staff_name']  # type: ignore
+                if 'staff_image' in validated_data:  # type: ignore
+                    staff_service.staff_image = validated_data['staff_image']  # type: ignore
+                if 'status' in validated_data:  # type: ignore
+                    staff_service.status = validated_data['status']  # type: ignore
+                if 'is_active' in validated_data:  # type: ignore
+                    staff_service.is_active = validated_data['is_active']  # type: ignore
+                
+                staff_service.save()
+            
+            logger.info(f"[ministry:{ministry.slug}] Staff service updated: {staff_service.service_name} - {staff_service.staff_name}")
+            
+            context = {'request': request} if request else {}
+            return True, {
+                "success": True,
+                "data": StaffServiceSerializer(staff_service, context=context).data,
+                "message": "Staff service updated successfully"
+            }, 200
+            
+        except StaffService.DoesNotExist:
+            return False, {"success": False, "error": "Staff service not found"}, 404
+        except Exception as e:
+            logger.error(f"[ministry:{ministry.slug}] Update staff service error: {str(e)}")
+            return False, {"success": False, "error": "Failed to update staff service"}, 500
+    
+    @staticmethod
+    def toggle_status(ministry, staff_service_id, new_status=None):
+        """
+        Toggle service status between ACTIVE and PAUSED.
+        Quick method for attendance-based service control.
+        
+        Args:
+            ministry: Current ministry
+            staff_service_id: UUID of staff service
+            new_status: 'active' or 'paused' (optional - auto-toggles if None)
+            
+        Returns:
+            tuple: (success, response_data, status_code)
+        """
+        try:
+            staff_service = StaffService.objects.get(
+                id=staff_service_id,
+                ministry=ministry
+            )
+            
+            # Auto-toggle if no status provided
+            if new_status is None:
+                new_status = 'paused' if staff_service.status == 'active' else 'active'
+            
+            # Update status
+            staff_service.status = new_status
+            staff_service.save(update_fields=['status'])
+            
+            # Serialize updated staff service
+            from ministry.serializers import StaffServiceSerializer
+            serializer = StaffServiceSerializer(staff_service)
+            
+            logger.info(f"[ministry:{ministry.slug}] Service status changed to {new_status}: {staff_service.service_name}")
+            
+            return True, {
+                "success": True,
+                "data": serializer.data,
+                "message": f"Service status changed to {new_status}"
+            }, 200
+            
+        except StaffService.DoesNotExist:
+            return False, {"success": False, "error": "Staff service not found"}, 404
+        except Exception as e:
+            logger.error(f"[ministry:{ministry.slug}] Toggle status error: {str(e)}")
+            return False, {"success": False, "error": "Failed to toggle status"}, 500
+    
+    @staticmethod
+    def reset_password(ministry, staff_service_id, new_password):
+        """
+        Reset staff service password.
+        
+        Args:
+            ministry: Current ministry
+            staff_service_id: UUID of staff service
+            new_password: New password
+            
+        Returns:
+            tuple: (success, response_data, status_code)
+        """
+        try:
+            staff_service = StaffService.objects.get(
+                id=staff_service_id,
+                ministry=ministry
+            )
+            
+            # Hash and set new password
+            staff_service.set_password(new_password)
+            staff_service.save(update_fields=['password'])
+            
+            logger.info(f"[ministry:{ministry.slug}] Password reset for staff service: {staff_service.service_name} - {staff_service.staff_name}")
+            
+            return True, {
+                "success": True,
+                "message": "Password reset successfully"
+            }, 200
+            
+        except StaffService.DoesNotExist:
+            return False, {"success": False, "error": "Staff service not found"}, 404
+        except Exception as e:
+            logger.error(f"[ministry:{ministry.slug}] Reset password error: {str(e)}")
+            return False, {"success": False, "error": "Failed to reset password"}, 500
+    
+    @staticmethod
+    def delete(ministry, staff_service_id):
+        """
+        Permanently delete staff service (hard delete).
+        
+        Args:
+            ministry: Current ministry
+            staff_service_id: UUID of staff service
+            
+        Returns:
+            tuple: (success, response_data, status_code)
+        """
+        try:
+            staff_service = StaffService.objects.get(
+                id=staff_service_id,
+                ministry=ministry
+            )
+            
+            service_name = staff_service.service_name
+            staff_name = staff_service.staff_name
+            service_email = staff_service.email
+            
+            # Permanently delete
+            staff_service.delete()
+            
+            logger.info(f"[ministry:{ministry.slug}] Staff service deleted: {service_name} - {staff_name} ({service_email})")
+            
+            return True, {
+                "success": True,
+                "message": "Staff service deleted permanently"
+            }, 200
+            
+        except StaffService.DoesNotExist:
+            return False, {"success": False, "error": "Staff service not found"}, 404
+        except Exception as e:
+            logger.error(f"[ministry:{ministry.slug}] Delete staff service error: {str(e)}")
+            return False, {"success": False, "error": "Failed to delete staff service"}, 500
             logger.error(f"[ministry:{ministry.slug}] Cancel invitation error: {str(e)}")
             return False, {"success": False, "error": "Failed to cancel invitation"}, 500

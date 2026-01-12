@@ -9,6 +9,7 @@ from django.db import models
 from django.conf import settings as django_settings
 from django.utils.text import slugify
 from django.utils import timezone
+from django.contrib.auth.hashers import make_password, check_password
 
 from core.storage import LogoCloudinaryStorage
 
@@ -58,11 +59,12 @@ class Ministry(models.Model):
     
     # Basic Info
     name = models.CharField(max_length=255, help_text="Ministry/Department name")
-    slug = models.SlugField(max_length=100, help_text="URL-friendly identifier")
+    slug = models.SlugField(max_length=100, blank=True, help_text="URL-friendly identifier (auto-generated from name)")
     description = models.TextField(blank=True, help_text="Ministry description")
     
-    # Contact Info
-    email = models.EmailField(help_text="Official contact email")
+    # Contact Info & Authentication
+    email = models.EmailField(unique=True, help_text="Official contact email (used for login)")
+    password = models.CharField(max_length=128, null=True, blank=True, help_text="Hashed password for ministry login")
     phone = models.CharField(max_length=20, blank=True)
     address = models.TextField(blank=True)
     website = models.URLField(blank=True)
@@ -157,6 +159,145 @@ class Ministry(models.Model):
     @property
     def is_active(self):
         return self.status == self.Status.ACTIVE and not self.is_deleted
+    
+    def set_password(self, raw_password):
+        """Hash and set the password for ministry login"""
+        self.password = make_password(raw_password)
+    
+    def check_password(self, raw_password):
+        """Verify the password for ministry login"""
+        if not self.password:
+            return False
+        return check_password(raw_password, self.password)
+
+
+
+class StaffService(models.Model):
+    """
+    Staff Service - Staff Login Account with Service Control
+    
+    Managed by Ministry Admin. Staff use these accounts to login.
+    Ministry can control service availability (e.g., pause when staff is absent).
+    
+    Future-proof design for attendance system integration:
+    - When staff marks absent → Ministry can pause service → Citizens see service unavailable
+    - Service status controls citizen-facing availability
+    - is_active provides system-level enable/disable
+    
+    Hierarchy: Place -> Ministry -> StaffService (staff login account + service control)
+    """
+    
+    class Status(models.TextChoices):
+        ACTIVE = 'active', 'Active'
+        PAUSED = 'paused', 'Paused'
+    
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    
+    # Parent Ministry - StaffService belongs to a Ministry
+    ministry = models.ForeignKey(
+        Ministry,
+        on_delete=models.CASCADE,
+        related_name='staff_services',
+        help_text="Ministry this staff service belongs to"
+    )
+    
+    # Service Information
+    service_name = models.CharField(
+        max_length=255,
+        help_text="Name of the service (e.g., IT Support, Birth Certificate)"
+    )
+    service_logo = models.ImageField(
+        upload_to=LogoCloudinaryStorage.get_upload_path,
+        storage=LogoCloudinaryStorage(),
+        null=True,
+        blank=True,
+        help_text="Service logo (uploaded to Cloudinary /logos folder)"
+    )
+    
+    # Staff Information
+    staff_name = models.CharField(
+        max_length=255,
+        help_text="Full name of the staff member handling this service"
+    )
+    staff_image = models.ImageField(
+        upload_to=LogoCloudinaryStorage.get_upload_path,
+        storage=LogoCloudinaryStorage(),
+        null=True,
+        blank=True,
+        help_text="Staff profile photo (uploaded to Cloudinary /logos folder)"
+    )
+    
+    # Authentication
+    email = models.EmailField(
+        unique=True,
+        help_text="Staff login email"
+    )
+    password = models.CharField(
+        max_length=128,
+        help_text="Hashed password for staff login"
+    )
+    
+    # Status Control (Ministry-controlled)
+    status = models.CharField(
+        max_length=20,
+        choices=Status.choices,
+        default=Status.ACTIVE,
+        help_text="Service availability status - Ministry can pause when staff is absent"
+    )
+    
+    # System-level Control
+    is_active = models.BooleanField(
+        default=True,
+        help_text="System-level enable/disable for this staff service account"
+    )
+    
+    # Timestamps
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    
+    class Meta:
+        verbose_name = 'Staff Service'
+        verbose_name_plural = 'Staff Services'
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['ministry', 'status', 'is_active']),
+            models.Index(fields=['email']),
+            models.Index(fields=['status']),
+            models.Index(fields=['is_active']),
+        ]
+    
+    def __str__(self):
+        return f"{self.service_name} - {self.staff_name} ({self.ministry.name})"
+    
+    def set_password(self, raw_password):
+        """Hash and set the password for staff login"""
+        self.password = make_password(raw_password)
+    
+    def check_password(self, raw_password):
+        """Verify the password for staff login"""
+        if not self.password:
+            return False
+        return check_password(raw_password, self.password)
+    
+    def pause_service(self):
+        """Pause service (e.g., when staff is absent)"""
+        self.status = self.Status.PAUSED
+        self.save(update_fields=['status'])
+    
+    def activate_service(self):
+        """Activate service (e.g., when staff is present)"""
+        self.status = self.Status.ACTIVE
+        self.save(update_fields=['status'])
+    
+    @property
+    def is_available(self):
+        """Check if service is available for citizens"""
+        return self.status == self.Status.ACTIVE and self.is_active
+    
+    @property
+    def place(self):
+        """Get the place this staff service belongs to"""
+        return self.ministry.place
 
 
 class MinistryMember(models.Model):

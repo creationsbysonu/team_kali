@@ -15,7 +15,7 @@ urlpatterns = [
     path('public/', include('ministry.public.urls')),
     
     # Ministry self-management (authenticated ministry members)
-    path('me/', include('ministry.management.urls')),
+    path('management/', include('ministry.management.urls')),
     
     # Super admin endpoints
     path('admin/', include('ministry.admin.urls')),

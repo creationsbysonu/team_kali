@@ -176,11 +176,17 @@ JWT_COOKIE_NAME = 'refresh_token'
 JWT_COOKIE_SAMESITE = 'Lax' # Use 'Strict' if possible
 
 
-# cache settings
+# Redis Configuration (Docker-ready)
+# Use REDIS_HOST env var for Docker, defaults to localhost for local dev
+REDIS_HOST = config('REDIS_HOST', default='localhost')
+REDIS_PORT = config('REDIS_PORT', default='6379')
+
+# Cache Configuration (Docker-ready)
+# Uses same Redis instance as Celery but different DB
 CACHES = {
     "default": {
         "BACKEND": "django_redis.cache.RedisCache", 
-        "LOCATION": config('REDIS_URL', default = 'redis://127.0.0.1:6379/1'), 
+        "LOCATION": f'redis://{REDIS_HOST}:{REDIS_PORT}/1',  # DB 1 for cache
         "OPTIONS" : {
             "CLIENT_CLASS" : "django_redis.client.DefaultClient", 
             "SOCKET_CONNECT_TIMEOUT": 5, 
@@ -194,7 +200,7 @@ CACHES = {
 
 # REST Framework settings
 REST_FRAMEWORK = {
-    'DEFAULT_AUTHENTICATION_CLASSES': ('rest_framework_simplejwt.authentication.JWTAuthentication',), 
+    'DEFAULT_AUTHENTICATION_CLASSES': ('authentication.core.authentication.MultiUserTypeJWTAuthentication',), 
     'DEFAULT_PERMISSION_CLASSES': ('rest_framework.permissions.IsAuthenticated',), 
     'DEFAULT_THROTTLE_CLASSES': [
         'rest_framework.throttling.AnonRateThrottle', 
@@ -202,11 +208,12 @@ REST_FRAMEWORK = {
     ], 
 }
 
+# Celery Configuration (uses REDIS_HOST defined above)
 CELERY_TIMEZONE = "Asia/Kathmandu"
 CELERY_TASK_TRACK_STARTED = True
 CELERY_TASK_TIME_LIMIT = 30*60
-CELERY_RESULT_BACKEND = 'redis://localhost:6379/0'
-CELERY_BROKER_URL = 'redis://localhost:6379/0'
+CELERY_RESULT_BACKEND = f'redis://{REDIS_HOST}:{REDIS_PORT}/0'
+CELERY_BROKER_URL = f'redis://{REDIS_HOST}:{REDIS_PORT}/0'
 CELERY_ACCEPT_CONTENT = ['json']
 CELERY_TASK_SERIALIZER = 'json'
 CELERY_RESULT_SERIALIZER = 'json'
@@ -256,6 +263,7 @@ if DEBUG:
         'user-agent', 
         'x-csrftoken', 
         'x-requested-with',
+        'x-ministry-id',  # Custom header for ministry context
     ]
 else:
     # Production settings - specific origins only

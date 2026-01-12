@@ -19,7 +19,7 @@ from django.conf import settings
 from authentication.models import CustomUser, OTPLog
 from authentication.serializers import UserSerializer
 from authentication.core.jwt_utils import TokenManager
-from .tasks import send_otp_email_task
+from .tasks import send_otp_email
 
 logger = logging.getLogger(__name__)
 
@@ -126,7 +126,7 @@ class OTPService:
             )
             
             # Send OTP via email asynchronously
-            send_otp_email_task.delay(email, otp)  # type: ignore[union-attr]
+            send_otp_email.delay(email, otp)  # type: ignore[union-attr]
             
             logger.info(f"[otp] OTP generated and queued for {email}")
             

@@ -21,24 +21,40 @@ logger = logging.getLogger(__name__)
 
 class SuperAdminMinistryListView(BaseAPIView):
     """
-    GET /ministrys/admin/
-    POST /ministrys/admin/
+    GET /ministry/admin/
+    POST /ministry/admin/
     
-    List all ministrys / Create new ministry.
+    List all ministries with filtering / Create new ministry.
     Super admin only.
+    
+    Query Parameters:
+        - place: UUID - Filter by place ID
+        - status: string - Filter by status (active, pending, suspended)
+        - search: string - Search by ministry name (min 2 chars)
+    
+    Examples:
+        GET /ministry/admin/                           # All ministries
+        GET /ministry/admin/?place=<uuid>              # Ministries in specific place
+        GET /ministry/admin/?status=active             # Only active ministries
+        GET /ministry/admin/?place=<uuid>&status=active  # Combined filters
     """
     permission_classes = [IsAuthenticated, IsSuperAdmin]
     parser_classes = [MultiPartParser, FormParser, JSONParser]
     
     def get(self, request):
         try:
+            # Extract and validate filters
             filters = {
+                'place': request.query_params.get('place'),
                 'status': request.query_params.get('status'),
                 'search': request.query_params.get('search'),
             }
             
+            # Remove None values
+            filters = {k: v for k, v in filters.items() if v is not None}
+            
             success, response_data, status_code = SuperAdminMinistryService.get_list(
-                filters=filters,
+                filters=filters if filters else None,
                 request=request
             )
             return Response(
@@ -48,7 +64,7 @@ class SuperAdminMinistryListView(BaseAPIView):
         except Exception as e:
             logger.error(f"[super_admin] List view error: {str(e)}")
             return Response(
-                standardized_response(success=False, error="Failed to fetch ministrys"),
+                standardized_response(success=False, error="Failed to fetch ministries"),
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
     
@@ -72,10 +88,48 @@ class SuperAdminMinistryListView(BaseAPIView):
             )
 
 
+class SuperAdminPlaceFilterOptionsView(BaseAPIView):
+    """
+    GET /ministry/admin/places/
+    
+    Get list of places for filter dropdown.
+    Returns all places with their ministry counts.
+    Super admin only.
+    
+    Response:
+        {
+            "success": true,
+            "data": [
+                {"id": "uuid", "name": "Kathmandu", "slug": "kathmandu", "ministry_count": 5},
+                {"id": "uuid", "name": "Pokhara", "slug": "pokhara", "ministry_count": 3}
+            ],
+            "count": 2
+        }
+    """
+    permission_classes = [IsAuthenticated, IsSuperAdmin]
+    
+    def get(self, request):
+        try:
+            success, response_data, status_code = SuperAdminMinistryService.get_places_for_filter(
+                request=request
+            )
+            return Response(
+                standardized_response(**response_data),
+                status=status_code
+            )
+        except Exception as e:
+            logger.error(f"[super_admin] Places filter options error: {str(e)}")
+            return Response(
+                standardized_response(success=False, error="Failed to fetch places"),
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+
 class SuperAdminMinistryDetailView(BaseAPIView):
     """
     GET /ministrys/admin/<uuid:pk>/
     PUT /ministrys/admin/<uuid:pk>/
+    PATCH /ministrys/admin/<uuid:pk>/
     DELETE /ministrys/admin/<uuid:pk>/
     
     Get/Update/Delete ministry.
@@ -119,6 +173,10 @@ class SuperAdminMinistryDetailView(BaseAPIView):
                 standardized_response(success=False, error="Failed to update ministry"),
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
+    
+    def patch(self, request, pk):
+        """Partial update - same as PUT for this endpoint"""
+        return self.put(request, pk)
     
     def delete(self, request, pk):
         """Soft delete a ministry (can be restored)"""

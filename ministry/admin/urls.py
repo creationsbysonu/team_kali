@@ -12,11 +12,15 @@ from .views import (
     SuperAdminMinistryAddStaffView,
     SuperAdminMinistryUsersView,
     SuperAdminMinistryUserDetailView,
+    SuperAdminPlaceFilterOptionsView,
 )
 
 app_name = 'admin'
 
 urlpatterns = [
+    # Filter options (MUST be before uuid patterns)
+    path('places/', SuperAdminPlaceFilterOptionsView.as_view(), name='places_filter'),
+    
     # Ministry management
     path('', SuperAdminMinistryListView.as_view(), name='list'),
     path('deleted/', SuperAdminMinistryDeletedListView.as_view(), name='deleted_list'),

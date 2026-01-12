@@ -5,59 +5,233 @@ Handles system-wide ministry management.
 Only for super admins.
 """
 import logging
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 from django.db import transaction
+from django.db.models import Q, Count, Prefetch
 from django.core.cache import cache
 from django.contrib.auth import get_user_model
 from django.utils import timezone
 
 from ministry.models import Ministry, MinistryMember
 from ministry.serializers import MinistryAdminSerializer, MinistryCreateSerializer
+from places.models import Place
 
 CustomUser = get_user_model()
 
 logger = logging.getLogger(__name__)
+
+# Cache timeout constants
+MINISTRY_LIST_CACHE_TIMEOUT = 300  # 5 minutes
+PLACE_FILTER_CACHE_TIMEOUT = 600   # 10 minutes
 
 
 class SuperAdminMinistryService:
     """Service for super admin ministry management"""
     
     @staticmethod
-    def get_list(filters=None, request=None):
+    def _build_cache_key(filters: Optional[Dict] = None) -> str:
         """
-        Get list of all ministrys with filtering.
+        Build a deterministic cache key from filters.
+        
+        Uses sorted filter values to ensure consistent key generation.
+        """
+        if not filters:
+            return "super_admin:ministries:all"
+        
+        # Extract and normalize filter values
+        parts = ["super_admin:ministries"]
+        
+        if place_id := filters.get('place'):
+            parts.append(f"place:{place_id}")
+        if status_val := filters.get('status'):
+            parts.append(f"status:{status_val}")
+        if search := filters.get('search'):
+            # Hash search term for shorter cache key
+            import hashlib
+            search_hash = hashlib.md5(search.lower().encode()).hexdigest()[:8]
+            parts.append(f"search:{search_hash}")
+        
+        return ":".join(parts)
+    
+    @staticmethod
+    def _invalidate_ministry_caches():
+        """Invalidate all ministry-related caches"""
+        cache.delete_pattern("super_admin:ministries:*")
+        cache.delete("public_ministrys_list")
+    
+    @staticmethod
+    def get_list(filters: Optional[Dict] = None, request=None):
+        """
+        Get list of all ministries with optimized filtering.
+        
+        Supports filtering by:
+        - place: UUID of place to filter by
+        - status: 'active', 'pending', 'suspended'
+        - search: text search on ministry name
+        
+        Uses database indexes for optimal performance:
+        - Index on (place, status) for combined filtering
+        - Index on (place, slug) for place-based lookups
+        - Index on (status) for status-only filtering
         
         Args:
-            filters: dict with status, search, etc.
+            filters: dict with place, status, search
+            request: HTTP request for context
             
         Returns:
             tuple: (success, response_data, status_code)
         """
         try:
-            queryset = Ministry.objects.all()
+            # Build cache key
+            cache_key = SuperAdminMinistryService._build_cache_key(filters)
+            
+            # Try cache first (skip if search filter - search results change frequently)
+            use_cache = not (filters and filters.get('search'))
+            if use_cache:
+                cached_data = cache.get(cache_key)
+                if cached_data is not None:
+                    logger.debug(f"[super_admin] Cache hit for ministry list: {cache_key}")
+                    return True, cached_data, 200
+            
+            # Build optimized queryset
+            # Use select_related for place to avoid N+1 queries
+            queryset = Ministry.objects.select_related('place').only(
+                'id', 'name', 'slug', 'email', 'phone', 'address', 'website',
+                'logo', 'status', 'description', 'settings',
+                'created_at', 'updated_at', 'is_deleted',
+                'place__id', 'place__name', 'place__slug'
+            )
+            
+            # Apply filters using Q objects for optimal query building
+            filter_conditions = Q()
             
             if filters:
-                if status := filters.get('status'):
-                    queryset = queryset.filter(status=status)
+                # Place filter - uses index (place, status) or (place, slug)
+                if place_id := filters.get('place'):
+                    # Validate place exists
+                    if not Place.objects.filter(id=place_id).exists():
+                        return False, {
+                            "success": False,
+                            "error": "Place not found"
+                        }, 404
+                    filter_conditions &= Q(place_id=place_id)
+                
+                # Status filter - uses index (status) or combined (place, status)
+                if status_val := filters.get('status'):
+                    if status_val not in [s[0] for s in Ministry.Status.choices]:
+                        return False, {
+                            "success": False,
+                            "error": f"Invalid status. Must be one of: {', '.join([s[0] for s in Ministry.Status.choices])}"
+                        }, 400
+                    filter_conditions &= Q(status=status_val)
+                
+                # Text search on name - case insensitive
                 if search := filters.get('search'):
-                    queryset = queryset.filter(name__icontains=search)
+                    # Clean and validate search term
+                    search = search.strip()
+                    if len(search) < 2:
+                        return False, {
+                            "success": False,
+                            "error": "Search term must be at least 2 characters"
+                        }, 400
+                    filter_conditions &= Q(name__icontains=search)
             
-            queryset = queryset.order_by('-created_at')
+            # Apply all filters at once (single WHERE clause)
+            if filter_conditions:
+                queryset = queryset.filter(filter_conditions)
             
+            # Annotate with member count for display (using correct related_name 'members')
+            queryset = queryset.annotate(
+                member_count=Count('members', distinct=True)
+            )
+            
+            # Order by place name first (grouping), then by ministry name
+            queryset = queryset.order_by('place__name', 'name', '-created_at')
+            
+            # Serialize data
             context = {'request': request} if request else {}
             data = MinistryAdminSerializer(queryset, many=True, context=context).data
             
-            return True, {
+            response_data = {
                 "success": True,
                 "data": data,
-                "count": len(data)
-            }, 200
+                "count": len(data),
+                "filters_applied": {
+                    k: v for k, v in (filters or {}).items() if v
+                }
+            }
+            
+            # Cache the result (skip for search queries)
+            if use_cache:
+                cache.set(cache_key, response_data, timeout=MINISTRY_LIST_CACHE_TIMEOUT)
+                logger.debug(f"[super_admin] Cached ministry list: {cache_key}")
+            
+            return True, response_data, 200
             
         except Exception as e:
             logger.error(f"[super_admin] Ministry list error: {str(e)}")
+            import traceback
+            logger.error(traceback.format_exc())
             return False, {
                 "success": False,
-                "error": "Failed to fetch ministrys"
+                "error": "Failed to fetch ministries"
+            }, 500
+    
+    @staticmethod
+    def get_places_for_filter(request=None):
+        """
+        Get list of places for the filter dropdown.
+        
+        Returns places that have at least one ministry.
+        Optimized for filter UI - minimal data transfer.
+        
+        Returns:
+            tuple: (success, response_data, status_code)
+        """
+        try:
+            cache_key = "super_admin:places:filter_options"
+            
+            # Try cache first
+            cached_data = cache.get(cache_key)
+            if cached_data is not None:
+                logger.debug("[super_admin] Cache hit for places filter options")
+                return True, cached_data, 200
+            
+            # Get places with ministry count
+            # Only return places that have at least one ministry OR all places for super admin
+            places = Place.objects.annotate(
+                ministry_count=Count('ministries', distinct=True)
+            ).values(
+                'id', 'name', 'slug', 'ministry_count'
+            ).order_by('name')
+            
+            # Convert to list with proper formatting
+            place_options = [
+                {
+                    "id": str(place['id']),
+                    "name": place['name'],
+                    "slug": place['slug'],
+                    "ministry_count": place['ministry_count']
+                }
+                for place in places
+            ]
+            
+            response_data = {
+                "success": True,
+                "data": place_options,
+                "count": len(place_options)
+            }
+            
+            # Cache for longer - places don't change often
+            cache.set(cache_key, response_data, timeout=PLACE_FILTER_CACHE_TIMEOUT)
+            
+            return True, response_data, 200
+            
+        except Exception as e:
+            logger.error(f"[super_admin] Places filter options error: {str(e)}")
+            return False, {
+                "success": False,
+                "error": "Failed to fetch places"
             }, 500
     
     @staticmethod
@@ -87,16 +261,24 @@ class SuperAdminMinistryService:
     @staticmethod
     def create_ministry(data, admin_user, request=None):
         """
-        Create a new ministry (ministry).
+        Create a new ministry with email and password for direct login.
         
         Args:
-            data: Ministry data
+            data: Ministry data including email and password
             admin_user: Super admin creating the ministry
             
         Returns:
             tuple: (success, response_data, status_code)
         """
         try:
+            # Extract password before serializer validation
+            password = data.get('password')
+            if not password:
+                return False, {
+                    "success": False,
+                    "error": "Password is required for ministry creation"
+                }, 400
+            
             serializer = MinistryCreateSerializer(data=data)
             if not serializer.is_valid():
                 return False, {
@@ -107,11 +289,16 @@ class SuperAdminMinistryService:
             with transaction.atomic():
                 validated = serializer.validated_data
                 ministry = Ministry.objects.create(**validated)  # type: ignore[arg-type]
+                
+                # Set the ministry password (hashed)
+                ministry.set_password(password)
+                ministry.save(update_fields=['password'])
+                
+                logger.info(f"[super_admin] Ministry '{ministry.name}' created by {admin_user.email}")
             
             # Clear caches
             cache.delete("public_ministrys_list")
-            
-            logger.info(f"[super_admin] Ministry '{ministry.name}' created by {admin_user.email}")
+            cache.delete_pattern("public_ministries_*")
             
             context = {'request': request} if request else {}
             return True, {
@@ -122,6 +309,8 @@ class SuperAdminMinistryService:
             
         except Exception as e:
             logger.error(f"[super_admin] Create ministry error: {str(e)}")
+            import traceback
+            logger.error(traceback.format_exc())
             return False, {
                 "success": False,
                 "error": "Failed to create ministry"

@@ -6,9 +6,9 @@ No authentication required.
 """
 import logging
 from django.core.cache import cache
-from ministry.models import Ministry
-from ministry.serializers import MinistryPublicSerializer
-from services.models import Service
+from ministry.models import Ministry, StaffService
+from ministry.serializers import MinistryListSerializer, MinistryPublicSerializer
+from ministry.public.serializers import StaffServicePublicListSerializer
 
 logger = logging.getLogger(__name__)
 
@@ -23,6 +23,7 @@ class PublicMinistryService:
     def get_ministries_by_place(place_slug, request=None):
         """
         Get list of active ministries for a place.
+        Returns only logo and name for public listing.
         
         Args:
             place_slug: Place slug
@@ -52,7 +53,7 @@ class PublicMinistryService:
             ).order_by('name')
             
             context = {'request': request} if request else {}
-            data = MinistryPublicSerializer(ministries, many=True, context=context).data
+            data = MinistryListSerializer(ministries, many=True, context=context).data
             
             # Cache the result
             cache.set(cache_key, data, PublicMinistryService.CACHE_TIMEOUT)
@@ -119,6 +120,8 @@ class PublicMinistryService:
     def get_services_by_ministry(place_slug, ministry_slug, request=None):
         """
         Get list of active services for a ministry.
+        Includes ministry nStaffService (ministry-created services) for a ministry.
+        Includes service info, staff info, and ministry branding.
         
         Args:
             place_slug: Place slug
@@ -150,31 +153,21 @@ class PublicMinistryService:
             if not ministry:
                 return False, {"success": False, "error": "Ministry not found"}, 404
             
-            # Query active services
-            services = Service.objects.filter(
+            # Query active StaffService records (ministry-created services)
+            staff_services = StaffService.objects.filter(
                 ministry=ministry,
                 is_active=True,
-                is_published=True
-            ).order_by('display_order', 'name')
+                status=StaffService.Status.ACTIVE
+            ).select_related('ministry').order_by('service_name')
             
-            data = []
-            for service in services:
-                data.append({
-                    'id': str(service.id),
-                    'name': service.name,
-                    'slug': service.slug,
-                    'short_description': service.short_description,
-                    'service_type': service.service_type,
-                    'processing_time': service.processing_time,
-                    'fee_amount': str(service.fee_amount),
-                    'icon': service.icon,
-                    'is_featured': service.is_featured,
-                })
+            # Use serializer to include service, staff, and ministry info
+            context = {'request': request} if request else {}
+            data = StaffServicePublicListSerializer(staff_services, many=True, context=context).data
             
             # Cache the result
             cache.set(cache_key, data, PublicMinistryService.CACHE_TIMEOUT)
             
-            logger.info(f"[public] Fetched {len(data)} services for {place_slug}/{ministry_slug}")
+            logger.info(f"[public] Fetched {len(data)} staff services for {place_slug}/{ministry_slug}")
             
             return True, {
                 "success": True,
