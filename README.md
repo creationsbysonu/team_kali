@@ -356,3 +356,4 @@ See `rag/models.py` for base classes and `rag/pipeline.py` for how prompts are c
 - This is a minimal reference; integrate your own embedding/LLM providers in `rag/models.py`.
 - For PDFs or advanced loaders, extend `rag/ingest.py`.
 # nova_hack
+# nova_hack
