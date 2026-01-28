@@ -74,9 +74,11 @@ class OllamaGenerator(GenerativeModel):
                     'role': 'system',
                     'content': (
                         'तपाईं नेपाल सरकारी दस्तावेजको सहायक हुनुहुन्छ। '
-                        'यदि दस्तावेज अंग्रेजीमा छ भने, त्यसको अर्थ बुझेर नेपालीमा विस्तृत उत्तर दिनुहोस्। '
-                        'देवनागरी लिपिमा मात्र लेख्नुहोस्। रोमन लिपि र अंग्रेजी शब्द प्रयोग नगर्नुहोस्। '
-                        'महत्वपूर्ण: प्रश्न नदोहोर्याउनुहोस्, सिधै उत्तर सुरु गर्नुहोस्।'
+                        'यदि दस्तावेज अंग्रेजीमा छ भने, त्यसको अर्थ बुझेर पूर्ण नेपालीमा उत्तर दिनुहोस्। '
+                        'देवनागरी लिपिमा मात्र लेख्नुहोस्। '
+                        'अंग्रेजी शब्द प्रयोग नगर्नुहोस् - "Article" को सट्टा "धारा" लेख्नुहोस्। '
+                        '"Federal" को सट्टा "संघीय", "Law" को सट्टा "कानून" प्रयोग गर्नुहोस्। '
+                        'प्रश्न नदोहोर्याउनुहोस्। एउटै कुरा बारम्बार नलेख्नुहोस्।'
                     )
                 }, {
                     'role': 'user',
@@ -97,6 +99,164 @@ class OllamaGenerator(GenerativeModel):
             return answer if answer else "यस विषयमा आधिकारिक जानकारी उपलब्ध छैन।"
         except Exception as e:
             print(f"Ollama generation failed: {e}")
+            return "यस विषयमा आधिकारिक जानकारी उपलब्ध छैन।"
+
+
+class GeminiGenerator(GenerativeModel):
+    """Google Gemini API for Nepali answer generation."""
+    def __init__(self, model_name: str = "gemini-2.5-flash", api_key: str = None):
+        self.model_name = model_name
+        self.api_key = api_key
+        self._model = None
+        
+    def _ensure_model(self):
+        if self._model is None:
+            import google.generativeai as genai
+            from google.generativeai.types import HarmCategory, HarmBlockThreshold
+            import os
+            
+            # Get API key from parameter or environment
+            api_key = self.api_key or os.getenv("GOOGLE_GEMINI_API_KEY")
+            if not api_key:
+                raise ValueError("❌ GOOGLE_GEMINI_API_KEY not found in environment")
+            
+            # Validate API key format
+            if not api_key.startswith("AIza") or len(api_key) < 30:
+                raise ValueError("❌ Invalid GOOGLE_GEMINI_API_KEY format")
+            
+            genai.configure(api_key=api_key)
+            print(f"✓ API Key configured (first 10 chars): {api_key[:10]}...")
+            
+            # Configure generation parameters - optimized for complete comprehensive answers
+            generation_config = {
+                "temperature": 0.1,  # Very low for maximum consistency and completeness
+                "top_p": 0.9,
+                "top_k": 20,
+                "max_output_tokens": 8192,  # Much higher for comprehensive lists
+                "candidate_count": 1,
+            }
+            
+            # Disable safety filters for government document processing
+            safety_settings = {
+                HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
+                HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
+                HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_NONE,
+                HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
+            }
+            
+            # ChatGPT-style system instruction with clear role and capabilities
+            system_instruction = (
+                'तपाईं नेपाल सरकारको उच्च-दक्ष AI सहायक हुनुहुन्छ जसले सरकारी दस्तावेजबाट जानकारी निकाल्नमा विशेषज्ञता राख्नुहुन्छ।\\n\\n'
+                '### तपाईंको क्षमताहरू:\\n'
+                '• English र Nepali दुवै दस्तावेजहरू राम्ररी बुझ्न सक्नुहुन्छ\\n'
+                '• OCR बाट प्राप्त दस्तावेजका त्रुटिहरू बुझेर सही अर्थ निकाल्न सक्नुहुन्छ\\n'
+                '• जटिल कानुनी र प्रशासनिक भाषालाई सरल नेपालीमा व्याख्या गर्न सक्नुहुन्छ\\n\\n'
+                '### तपाईंले पालना गर्नुपर्ने नियमहरू:\\n'
+                '1. ✓ उत्तर ALWAYS देवनागरी (नेपाली) लिपिमा लेख्नुहोस्\\n'
+                '2. ✓ दिइएको दस्तावेजको जानकारीमा मात्र आधारित रहनुहोस्\\n'
+                '3. ✓ पूर्ण र विस्तृत जवाफ दिनुहोस् - अधूरो नदिनुहोस्\\n'
+                '4. ✓ व्यापक प्रश्नमा सबै सम्बन्धित बुँदाहरू सूचीबद्ध गर्नुहोस्\\n'
+                '5. ✓ जवाफ स्पष्ट र संगठित तरिकाले प्रस्तुत गर्नुहोस्\\n'
+                '6. ✗ "उत्तर:", "जवाफ:" जस्ता लेबल नलेख्नुहोस्\\n'
+                '7. ✗ प्रश्न नदोहोर्याउनुहोस्\\n'
+                '8. ✗ केवल १-२ उदाहरण मात्र नदिनुहोस् जब सबै माग गरिएको छ\\n\\n'
+                '### अनुवाद गर्नुपर्ने शब्दहरू:\\n'
+                'Article→धारा, Federal→संघीय, Law→कानून, Right→अधिकार, Ministry→मन्त्रालय, Government→सरकार'
+            )
+            
+            self._model = genai.GenerativeModel(
+                model_name=self.model_name,
+                generation_config=generation_config,
+                safety_settings=safety_settings,
+                system_instruction=system_instruction
+            )
+            print(f"✓ Initialized Gemini model: {self.model_name}")
+    
+    def generate(self, prompt: str) -> str:
+        self._ensure_model()
+        
+        # Try generation with full prompt first
+        result = self._try_generate(prompt)
+        
+        # If safety blocked, try again with sanitized prompt
+        if result == "यस विषयमा आधिकारिक जानकारी उपलब्ध छैन।" and "SAFETY" in str(getattr(self, '_last_block_reason', '')):
+            print("   🔄 Retrying with sanitized context...")
+            # Remove potentially problematic characters from prompt
+            sanitized_prompt = self._sanitize_prompt(prompt)
+            result = self._try_generate(sanitized_prompt)
+        
+        return result
+    
+    def _sanitize_prompt(self, prompt: str) -> str:
+        """Remove potentially problematic content that might trigger safety filters."""
+        import re
+        # Remove special characters and clean up OCR artifacts
+        sanitized = re.sub(r'[\x00-\x1f\x7f-\x9f]', '', prompt)  # Remove control chars
+        sanitized = re.sub(r'c&\\|jem|Ret\s+', '', sanitized)  # Remove OCR artifacts
+        sanitized = re.sub(r'\s+', ' ', sanitized)  # Normalize whitespace
+        return sanitized.strip()
+    
+    def _try_generate(self, prompt: str) -> str:
+        """Attempt generation with given prompt."""
+        try:
+            response = self._model.generate_content(prompt)
+            
+            # Handle blocked responses
+            if not response.candidates:
+                print("⚠️  Gemini blocked the response (no candidates returned)")
+                self._last_block_reason = "SAFETY"
+                return "यस विषयमा आधिकारिक जानकारी उपलब्ध छैन।"
+            
+            candidate = response.candidates[0]
+            
+            # Check finish reason
+            if candidate.finish_reason == 1:  # STOP - normal completion
+                if hasattr(response, 'text') and response.text:
+                    answer = response.text.strip()
+                    print(f"\nGemini response: {answer[:200]}...")
+                    print("="*60)
+                    return answer
+                else:
+                    print("⚠️  Response completed but no text available")
+                    return "यस विषयमा आधिकारिक जानकारी उपलब्ध छैन।"
+                    
+            elif candidate.finish_reason == 2:  # SAFETY - blocked by safety filters
+                print(f"⚠️  Response blocked by safety filters (finish_reason: SAFETY)")
+                self._last_block_reason = "SAFETY"
+                # Try to extract partial content if available
+                if candidate.content and candidate.content.parts:
+                    try:
+                        partial_text = "".join([part.text for part in candidate.content.parts if hasattr(part, 'text')])
+                        if partial_text.strip():
+                            print(f"   Returning partial content: {len(partial_text)} chars")
+                            return partial_text.strip()
+                    except:
+                        pass
+                return "यस विषयमा आधिकारिक जानकारी उपलब्ध छैन।"
+                
+            elif candidate.finish_reason == 3:  # MAX_TOKENS - response truncated
+                print(f"⚠️  Response truncated (finish_reason: MAX_TOKENS)")
+                if hasattr(response, 'text') and response.text:
+                    return response.text.strip() + "..."
+                return "यस विषयमा आधिकारिक जानकारी उपलब्ध छैन।"
+                
+            else:
+                print(f"⚠️  Unexpected finish_reason: {candidate.finish_reason}")
+                return "यस विषयमा आधिकारिक जानकारी उपलब्ध छैन।"
+                
+        except AttributeError as e:
+            print(f"❌ Gemini response format error: {e}")
+            return "यस विषयमा आधिकारिक जानकारी उपलब्ध छैन।"
+        except Exception as e:
+            error_msg = str(e)
+            if "404" in error_msg:
+                print(f"❌ Model not found: {self.model_name}")
+            elif "API_KEY" in error_msg.upper():
+                print(f"❌ API key error: {error_msg}")
+            elif "quota" in error_msg.lower() or "rate" in error_msg.lower():
+                print(f"❌ API quota/rate limit exceeded: {error_msg}")
+            else:
+                print(f"❌ Gemini error: {error_msg}")
             return "यस विषयमा आधिकारिक जानकारी उपलब्ध छैन।"
 
 

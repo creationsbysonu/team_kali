@@ -90,56 +90,112 @@ def _extract_text_from_image(image_path: Path) -> Tuple[str, Dict[str, str]]:
             image.close()
 
 
-def _read_doc(path: Path) -> (Dict[str, str], str):
-    if path.suffix.lower() in {".md", ".txt"}:
-        post = frontmatter.load(path)
-        meta = {
-            "ministry": str(post.metadata.get("ministry", "Unknown")),
-            "title": str(post.metadata.get("title", path.stem)),
-            "upload_date": str(post.metadata.get("upload_date", "Unknown")),
-            "path": str(path)
-        }
-        return meta, post.content
+def _read_doc(path: Path) -> Tuple[Dict[str, str], str, List[Tuple[str, int]]]:
+    """Read a document and return (metadata, full_text, page_texts).
+    
+    Returns:
+        Tuple of (meta_dict, full_text_string, list of (page_text, page_num) tuples)
+    """
+    # Check for metadata file (for Cloudinary/Django integration)
+    metadata_file = path.with_suffix('.meta.json')
+    external_metadata = {}
+    if metadata_file.exists():
+        try:
+            with open(metadata_file, 'r', encoding='utf-8') as f:
+                external_metadata = json.load(f)
+            print(f"📋 Loaded metadata from {metadata_file.name}")
+        except Exception as e:
+            print(f"⚠️ Failed to load metadata: {e}")
+    
+    if path.suffix.lower() == ".md":
+        with open(path, encoding="utf-8") as f:
+            post = frontmatter.load(f)
+            meta = post.metadata
+            meta["path"] = str(path)
+            if "title" not in meta:
+                meta["title"] = path.stem
+            # Merge external metadata (from Cloudinary/Django)
+            if external_metadata:
+                meta.update(external_metadata)
+            return meta, post.content, [(post.content, 1)]
+    
+    elif path.suffix.lower() == ".txt":
+        with open(path, encoding="utf-8") as f:
+            text = f.read()
+        meta = {"ministry": "Unknown", "title": path.stem, "upload_date": "Unknown", "path": str(path)}
+        # Merge external metadata
+        if external_metadata:
+            meta.update(external_metadata)
+        return meta, text, [(text, 1)]
+    
     elif path.suffix.lower() == ".pdf":
         reader = PdfReader(str(path))
-        text = "\n".join(page.extract_text() or "" for page in reader.pages)
+        page_texts = []  # List of (text, page_num)
         
-        # Initialize metadata
-        meta = {
-            "ministry": "Unknown",
-            "title": path.stem,
-            "upload_date": "Unknown",
-            "path": str(path)
-        }
+        # Try to extract text normally from each page
+        has_text = False
+        for page_num, page in enumerate(reader.pages, start=1):
+            page_text = page.extract_text()
+            if page_text and page_text.strip():
+                has_text = True
+                page_texts.append((page_text, page_num))
+            else:
+                page_texts.append(("", page_num))
         
-        # Check if PDF is scanned (very little or no text extracted)
-        if len(text.strip()) < 50:  # Threshold for scanned PDF
-            print(f"📄 Detected scanned PDF: {path.name}, using enhanced OCR...")
+        # If no text extracted, use OCR
+        if not has_text:
+            print(f"  Using OCR for {path.name}")
             ocr_text, ocr_metadata = _extract_text_from_pdf_ocr(path)
-            text = ocr_text
-            # Merge OCR-detected metadata (ministry, etc.)
+            # OCR returns full text, assign to page 1 for simplicity
+            page_texts = [(ocr_text, 1)]
+            meta = {
+                "ministry": "Unknown",
+                "title": path.stem,
+                "upload_date": "Unknown",
+                "path": str(path)
+            }
             if ocr_metadata:
                 meta.update(ocr_metadata)
+            # Merge external metadata (takes precedence)
+            if external_metadata:
+                meta.update(external_metadata)
+            full_text = ocr_text
+        else:
+            # Concatenate all page texts
+            full_text = "\n".join([pt[0] for pt in page_texts if pt[0]])
+            meta = {
+                "ministry": "Unknown",
+                "title": path.stem,
+                "upload_date": "Unknown",
+                "path": str(path)
+            }
+            # Merge external metadata (takes precedence)
+            if external_metadata:
+                meta.update(external_metadata)
         
-        return meta, text
+        return meta, full_text, page_texts
+    
     elif path.suffix.lower() in {".jpg", ".jpeg", ".png", ".tiff", ".bmp"}:
-        # Image files - use enhanced OCR directly
-        print(f"🖼️ Processing image with enhanced OCR: {path.name}")
         text, ocr_metadata = _extract_text_from_image(path)
-        
         meta = {
             "ministry": "Unknown",
             "title": path.stem,
             "upload_date": "Unknown",
             "path": str(path)
         }
-        # Merge OCR-detected metadata
         if ocr_metadata:
             meta.update(ocr_metadata)
+        # Merge external metadata (takes precedence)
+        if external_metadata:
+            meta.update(external_metadata)
         
-        return meta, text
+        return meta, text, [(text, 1)]
     else:
-        return {"ministry": "Unknown", "title": path.stem, "upload_date": "Unknown", "path": str(path)}, ""
+        meta = {"ministry": "Unknown", "title": path.stem, "upload_date": "Unknown", "path": str(path)}
+        # Merge external metadata
+        if external_metadata:
+            meta.update(external_metadata)
+        return meta, "", []
 
 
 def _chunk_text(text: str, size: int, overlap: int) -> List[str]:
@@ -158,13 +214,7 @@ def _chunk_text(text: str, size: int, overlap: int) -> List[str]:
 
 
 def _chunk_text_with_metadata(text: str, meta: Dict[str, str], size: int, overlap: int) -> List[str]:
-    """
-    Chunk text with metadata prepended for better retrieval.
-    Prepends ministry and title information to each chunk.
-    
-    Format: [Ministry Name] [Document Title]\n{chunk_text}
-    """
-    # Create metadata prefix
+    """Chunk text with metadata prepended."""
     prefix_parts = []
     if meta.get('ministry') and meta['ministry'] != 'Unknown':
         prefix_parts.append(f"[{meta['ministry']}]")
@@ -173,7 +223,6 @@ def _chunk_text_with_metadata(text: str, meta: Dict[str, str], size: int, overla
     
     prefix = " ".join(prefix_parts)
     
-    # Get base chunks
     words = text.split()
     chunks = []
     start = 0
@@ -181,9 +230,8 @@ def _chunk_text_with_metadata(text: str, meta: Dict[str, str], size: int, overla
         end = min(start + size, len(words))
         chunk_text = " ".join(words[start:end])
         if chunk_text.strip():
-            # Prepend metadata to chunk
             if prefix:
-                chunk_with_meta = f"{prefix}\\n{chunk_text}"
+                chunk_with_meta = f"{prefix}\n{chunk_text}"
             else:
                 chunk_with_meta = chunk_text
             chunks.append(chunk_with_meta)
@@ -194,15 +242,59 @@ def _chunk_text_with_metadata(text: str, meta: Dict[str, str], size: int, overla
     return chunks
 
 
+def _chunk_pages_with_metadata(page_texts: List[Tuple[str, int]], meta: Dict[str, str], size: int, overlap: int) -> List[Tuple[str, int]]:
+    """Chunk page-aware text and track which page each chunk came from.
+    
+    Returns:
+        List of (chunk_text_with_metadata, page_number) tuples
+    """
+    prefix_parts = []
+    if meta.get('ministry') and meta['ministry'] != 'Unknown':
+        prefix_parts.append(f"[{meta['ministry']}]")
+    if meta.get('title'):
+        prefix_parts.append(f"[{meta['title']}]")
+    
+    prefix = " ".join(prefix_parts)
+    
+    chunks_with_pages = []
+    
+    for page_text, page_num in page_texts:
+        if not page_text or not page_text.strip():
+            continue
+            
+        words = page_text.split()
+        start = 0
+        
+        while start < len(words):
+            end = min(start + size, len(words))
+            chunk_text = " ".join(words[start:end])
+            
+            if chunk_text.strip():
+                if prefix:
+                    chunk_with_meta = f"{prefix}\n{chunk_text}"
+                else:
+                    chunk_with_meta = chunk_text
+                chunks_with_pages.append((chunk_with_meta, page_num))
+            
+            start += size - overlap
+            if start <= 0:
+                break
+    
+    return chunks_with_pages
+
+
 def load_and_chunk_docs(data_dir: Path = settings.data_dir) -> List[DocChunk]:
     chunks: List[DocChunk] = []
     for path in sorted(data_dir.glob("**/*")):
         if path.suffix.lower() not in {".md", ".txt", ".pdf", ".jpg", ".jpeg", ".png", ".tiff", ".bmp"}:
             continue
-        meta, body = _read_doc(path)
-        # Use metadata-aware chunking
-        for ch in _chunk_text_with_metadata(body, meta, settings.chunk_size_words, settings.chunk_overlap_words):
-            chunks.append(DocChunk(ch, meta))
+        meta, body, page_texts = _read_doc(path)
+        # Use page-aware chunking for PDFs with page tracking
+        for ch_text, page_num in _chunk_pages_with_metadata(page_texts, meta, settings.chunk_size_words, settings.chunk_overlap_words):
+            # Add page number to metadata
+            meta_with_page = meta.copy()
+            meta_with_page['page'] = str(page_num)
+            chunks.append(DocChunk(f"{ch_text} [पृष्ठ {page_num}]", meta_with_page))
     return chunks
 
 
@@ -212,15 +304,20 @@ def ingest_to_db(embedder: EmbeddingModel, data_dir: Path = settings.uploads_dir
     for path in sorted(data_dir.glob("**/*")):
         if path.suffix.lower() not in {".md", ".txt", ".pdf", ".jpg", ".jpeg", ".png", ".tiff", ".bmp"}:
             continue
-        meta, body = _read_doc(path)
+        meta, body, page_texts = _read_doc(path)
         if not body or not body.strip():
             print(f"Skipping empty document: {path.name}")
             continue
         doc_id = upsert_document(conn, meta)
-        # Use metadata-aware chunking
-        chunks = _chunk_text_with_metadata(body, meta, settings.chunk_size_words, settings.chunk_overlap_words)
-        if not chunks:
+        
+        # Use page-aware chunking with page number tracking
+        chunks_with_pages = _chunk_pages_with_metadata(page_texts, meta, settings.chunk_size_words, settings.chunk_overlap_words)
+        if not chunks_with_pages:
             continue
+        
+        # Add page numbers to chunk texts
+        chunks = [f"{ch_text} [पृष्ठ {page_num}]" for ch_text, page_num in chunks_with_pages]
+        
         # Compute tokens and embeddings in batch
         tokens = None
         if hasattr(embedder, "count_tokens"):
@@ -255,14 +352,19 @@ def ingest_to_mysql(embedder: EmbeddingModel, mysql_cfg: Dict[str, str], data_di
     for path in sorted(data_dir.glob("**/*")):
         if path.suffix.lower() not in {".md", ".txt", ".pdf", ".jpg", ".jpeg", ".png", ".tiff", ".bmp"}:
             continue
-        meta, body = _read_doc(path)
+        meta, body, page_texts = _read_doc(path)
         if not body.strip():
             continue
         doc_id = upsert_document_mysql(conn, meta)
-        # Use metadata-aware chunking
-        chunks = _chunk_text_with_metadata(body, meta, settings.chunk_size_words, settings.chunk_overlap_words)
-        if not chunks:
+        
+        # Use page-aware chunking with page number tracking
+        chunks_with_pages = _chunk_pages_with_metadata(page_texts, meta, settings.chunk_size_words, settings.chunk_overlap_words)
+        if not chunks_with_pages:
             continue
+        
+        # Add page numbers to chunk texts
+        chunks = [f"{ch_text} [पृष्ठ {page_num}]" for ch_text, page_num in chunks_with_pages]
+        
         tokens = None
         if hasattr(embedder, "count_tokens"):
             try:

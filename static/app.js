@@ -167,7 +167,27 @@ async function sendMessage() {
     } catch (error) {
         console.error('Error:', error);
         if (error.name === 'AbortError') {
-            messageContent.innerHTML = `<span style="color: var(--text-light);">⏹️ जनरेशन रोकियो</span>`;
+            // Get the current content from DOM (what was already displayed)
+            const currentContent = messageContent.textContent || fullAnswer;
+            
+            // Keep the partial response and add a stopped indicator
+            if (currentContent && currentContent.trim()) {
+                // Preserve the text by wrapping it in HTML
+                const textSpan = document.createElement('span');
+                textSpan.textContent = currentContent;
+                
+                const stoppedBadge = document.createElement('div');
+                stoppedBadge.style.cssText = 'margin-top: 12px; padding: 8px 12px; background: var(--bg-secondary); border-radius: 8px; font-size: 13px; color: var(--text-light); display: inline-flex; align-items: center; gap: 6px;';
+                stoppedBadge.innerHTML = '⏹️ जनरेशन रोकियो';
+                
+                // Clear and rebuild with both elements
+                messageContent.innerHTML = '';
+                messageContent.appendChild(textSpan);
+                messageContent.appendChild(stoppedBadge);
+            } else {
+                // No content generated yet
+                messageContent.innerHTML = `<span style="color: var(--text-light);">⏹️ जनरेशन सुरु हुनु अघि नै रोकियो</span>`;
+            }
         } else {
             const errorMsg = error.message || 'सर्भर संग सम्पर्क हुन सकेन';
             messageContent.innerHTML = `

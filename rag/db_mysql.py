@@ -10,7 +10,8 @@ SCHEMA_STATEMENTS = [
       ministry VARCHAR(255),
       title VARCHAR(255),
       upload_date VARCHAR(64),
-      path TEXT
+      path TEXT,
+      notice_id VARCHAR(255)
     ) ENGINE=InnoDB;
     """,
     """
@@ -54,6 +55,13 @@ def init_db_mysql(conn):
             cur.execute(stmt)
         # Migrations for existing DBs - check if columns exist first
         try:
+            cur.execute("SHOW COLUMNS FROM documents LIKE 'notice_id'")
+            if cur.fetchone() is None:
+                print("🔧 Adding notice_id column to documents table")
+                cur.execute("ALTER TABLE documents ADD COLUMN notice_id VARCHAR(255)")
+        except Exception:
+            pass
+        try:
             cur.execute("SHOW COLUMNS FROM chunks LIKE 'token_count'")
             if cur.fetchone() is None:
                 cur.execute("ALTER TABLE chunks ADD COLUMN token_count INT")
@@ -70,8 +78,8 @@ def init_db_mysql(conn):
 def upsert_document_mysql(conn, meta: Dict[str, str]) -> int:
     with conn.cursor() as cur:
         cur.execute(
-            "INSERT INTO documents(ministry, title, upload_date, path) VALUES(%s,%s,%s,%s)",
-            (meta.get("ministry"), meta.get("title"), meta.get("upload_date"), meta.get("path")),
+            "INSERT INTO documents(ministry, title, upload_date, path, notice_id) VALUES(%s,%s,%s,%s,%s)",
+            (meta.get("ministry"), meta.get("title"), meta.get("upload_date"), meta.get("path"), meta.get("notice_id")),
         )
         return cur.lastrowid
 
@@ -110,7 +118,7 @@ def load_all_for_index_mysql(conn) -> Tuple[List[str], List[Dict[str, str]], np.
     with conn.cursor() as cur:
         cur.execute(
             """
-            SELECT c.text, d.ministry, d.title, d.upload_date, d.path, e.vector
+            SELECT c.text, d.ministry, d.title, d.upload_date, d.path, d.notice_id, e.vector
             FROM chunks c
             JOIN documents d ON d.id = c.document_id
             JOIN embeddings e ON e.chunk_id = c.id
@@ -121,13 +129,14 @@ def load_all_for_index_mysql(conn) -> Tuple[List[str], List[Dict[str, str]], np.
     texts: List[str] = []
     metas: List[Dict[str, str]] = []
     vecs: List[List[float]] = []
-    for text, ministry, title, upload_date, path, vec_json in rows:
+    for text, ministry, title, upload_date, path, notice_id, vec_json in rows:
         texts.append(text)
         metas.append({
             "ministry": ministry,
             "title": title,
             "upload_date": upload_date,
             "path": path,
+            "notice_id": notice_id
         })
         if isinstance(vec_json, (bytes, bytearray)):
             vec_json = vec_json.decode("utf-8")

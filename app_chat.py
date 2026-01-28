@@ -1,21 +1,27 @@
 """
 Modern FastAPI backend with streaming responses and chat history
 """
+from dotenv import load_dotenv
+load_dotenv()  # Load .env file before anything else
+
 from fastapi import FastAPI, File, UploadFile, HTTPException, Form, Request
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
+from pydantic import BaseModel
 import shutil
 import os
 import json
 import asyncio
+import httpx
+import re
 from datetime import datetime
 
 from rag.config import settings
-from rag.models import E5Embedding, OllamaGenerator
+from rag.models import E5Embedding, GeminiGenerator
 from rag.ingest import ingest_to_db, ingest_to_mysql
 from rag.pipeline import RAGPipeline
 from rag.db import connect, init_db
@@ -34,7 +40,7 @@ async def lifespan(app: FastAPI):
     
     # Startup
     embedder = E5Embedding()
-    generator = OllamaGenerator(model_name="llama3:latest")
+    generator = GeminiGenerator()  # Uses GOOGLE_GEMINI_API_KEY from .env
     pipeline = RAGPipeline(embedder, generator)
     
     # Ensure DB and uploads directory exist
@@ -101,6 +107,21 @@ async def root():
         <p>Please ensure the 'static' directory exists with index.html and app.js</p>
         <p>Current directory: """ + str(Path.cwd()) + """</p>
         """
+
+
+@app.get("/health")
+async def health_check():
+    """Health check endpoint - test if server is running."""
+    return {
+        "status": "online",
+        "message": "RAG System is running! ✅",
+        "server": "192.168.1.118:8001",
+        "chunks_loaded": len(pipeline.index.texts) if pipeline else 0,
+        "endpoints": {
+            "upload": "POST /ingest - Upload PDF via Cloudinary URL",
+            "chat": "POST /chat/simple - Ask questions"
+        }
+    }
 
 
 @app.post("/upload")
@@ -195,6 +216,188 @@ async def upload_files(files: List[UploadFile] = File(...)):
     })
 
 
+# ============================================
+# DJANGO/CLOUDINARY INTEGRATION ENDPOINTS
+# ============================================
+
+class IngestRequest(BaseModel):
+    """Request model for URL-based file ingestion"""
+    file_url: str
+    notice_id: str
+    title: Optional[str] = None
+    ministry: Optional[str] = None
+    upload_date: Optional[str] = None
+
+
+class Source(BaseModel):
+    """Source reference for chat responses"""
+    notice_id: str
+    title: Optional[str] = None
+    excerpt: Optional[str] = None
+    score: Optional[float] = None
+
+
+class ChatRequestSimple(BaseModel):
+    """Simple chat request model"""
+    question: str
+    session_id: Optional[str] = "default"
+
+
+class ChatResponseSimple(BaseModel):
+    """Chat response with sources"""
+    answer: str
+    sources: List[Source] = []
+
+
+@app.post("/ingest")
+async def ingest_from_url(req: IngestRequest):
+    """
+    Django sends file URL + notice_id from Cloudinary.
+    We download, process, and store with notice_id.
+    """
+    global pipeline, embedder
+    
+    try:
+        # Download file from URL
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            print(f"📥 Downloading from: {req.file_url}")
+            response = await client.get(req.file_url)
+            response.raise_for_status()
+            file_bytes = response.content
+        
+        # Save temporarily with notice_id as filename
+        file_ext = Path(req.file_url).suffix or ".pdf"
+        temp_path = settings.uploads_dir / f"{req.notice_id}{file_ext}"
+        
+        with open(temp_path, "wb") as f:
+            f.write(file_bytes)
+        
+        print(f"💾 Saved to: {temp_path}")
+        
+        # Add notice_id to metadata by creating a marker file
+        metadata_file = temp_path.with_suffix('.meta.json')
+        metadata = {
+            "notice_id": req.notice_id,
+            "title": req.title or "Unknown",
+            "ministry": req.ministry or "Unknown",
+            "upload_date": req.upload_date or datetime.now().strftime("%Y-%m-%d")
+        }
+        with open(metadata_file, "w", encoding="utf-8") as f:
+            json.dump(metadata, f, ensure_ascii=False)
+        
+        # Process the file (use existing ingestion logic)
+        if settings.use_mysql_primary:
+            try:
+                mysql_cfg = {
+                    "host": settings.mysql_host,
+                    "port": str(settings.mysql_port),
+                    "user": settings.mysql_user,
+                    "password": settings.mysql_password,
+                    "database": settings.mysql_database,
+                }
+                
+                # Ingest to MySQL
+                ingest_to_mysql(embedder, mysql_cfg, settings.uploads_dir)
+                
+                # Rebuild index
+                import pymysql
+                mysql_conn = pymysql.connect(
+                    host=settings.mysql_host,
+                    port=settings.mysql_port,
+                    user=settings.mysql_user,
+                    password=settings.mysql_password,
+                    database=settings.mysql_database,
+                )
+                try:
+                    pipeline.index.build_from_mysql(mysql_conn)
+                finally:
+                    mysql_conn.close()
+                
+            except Exception as e:
+                raise HTTPException(status_code=500, detail=f"डाटाबेस त्रुटि: {str(e)}")
+        else:
+            ingest_to_db(embedder, settings.uploads_dir, settings.db_path)
+            conn = connect(settings.db_path)
+            try:
+                pipeline.index.build_from_db(conn)
+            finally:
+                conn.close()
+        
+        return {
+            "success": True,
+            "notice_id": req.notice_id,
+            "title": req.title or "Unknown",
+            "chunks_processed": len(pipeline.index.texts)
+        }
+    
+    except httpx.HTTPError as e:
+        raise HTTPException(status_code=400, detail=f"फाइल डाउनलोड त्रुटि: {str(e)}")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"प्रशोधन त्रुटि: {str(e)}")
+
+
+@app.post("/chat/simple", response_model=ChatResponseSimple)
+async def chat_simple(req: ChatRequestSimple):
+    """
+    Simple chat endpoint for Django integration.
+    Returns answer with sources containing notice_id.
+    """
+    global pipeline
+    
+    try:
+        # Get conversation history
+        history = chat_history.get(req.session_id, [])
+        
+        # Get answer from pipeline
+        answer = pipeline.answer(req.question, conversation_history=history)
+        
+        # Perform the same retrieval to get sources
+        from rag.transliterate import normalize_query
+        normalized_question = normalize_query(req.question)
+        retrieved = pipeline.index.search(normalized_question, top_k=settings.top_k)
+        
+        # Extract unique sources from retrieved chunks
+        sources_dict = {}
+        for r in retrieved:
+            meta = r.get('meta', {})
+            notice_id = meta.get('notice_id')
+            
+            # Only include sources with notice_id (from Cloudinary uploads)
+            if notice_id and notice_id not in sources_dict:
+                # Extract short excerpt (clean page markers)
+                excerpt = r['text'][:150]
+                excerpt = re.sub(r'\[पृष्ठ \d+\]', '', excerpt).strip()
+                
+                sources_dict[notice_id] = Source(
+                    notice_id=notice_id,
+                    title=meta.get('title', 'Unknown'),
+                    excerpt=excerpt,
+                    score=r.get('score', 0.0)
+                )
+        
+        sources = list(sources_dict.values())
+        
+        # Store in chat history
+        if req.session_id not in chat_history:
+            chat_history[req.session_id] = []
+        
+        chat_history[req.session_id].append({
+            "role": "user",
+            "content": req.question,
+            "timestamp": datetime.now().isoformat()
+        })
+        chat_history[req.session_id].append({
+            "role": "assistant",
+            "content": answer,
+            "timestamp": datetime.now().isoformat()
+        })
+        
+        return ChatResponseSimple(answer=answer, sources=sources)
+    
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"त्रुटि: {str(e)}")
+
+
 @app.post("/chat/stream")
 async def chat_stream(request: Request):
     """
@@ -214,8 +417,11 @@ async def chat_stream(request: Request):
     
     async def generate():
         try:
-            # Get answer from pipeline
-            answer = pipeline.answer(question)
+            # Get conversation history for context
+            history = chat_history.get(session_id, [])
+            
+            # Get answer from pipeline with conversation context
+            answer = pipeline.answer(question, conversation_history=history)
             
             # Stream answer character by character (typewriter effect)
             for char in answer:
@@ -260,7 +466,11 @@ async def chat(question: str = Form(...), session_id: str = Form("default")):
         raise HTTPException(status_code=400, detail="प्रश्न धेरै लामो छ (अधिकतम १००० अक्षर)")
     
     try:
-        answer = pipeline.answer(question)
+        # Get conversation history for context
+        history = chat_history.get(session_id, [])
+        
+        # Get answer from pipeline with conversation context
+        answer = pipeline.answer(question, conversation_history=history)
         
         # Store in chat history
         if session_id not in chat_history:
