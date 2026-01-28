@@ -847,9 +847,9 @@
                 <textarea 
                     class="input-field" 
                     id="messageInput" 
-                    placeholder="तपाईंको प्रश्न यहाँ लेख्नुहोस्... (Ctrl/Cmd + Enter to send)"
+                    placeholder="तपाईंको प्रश्न यहाँ लेख्नुहोस्... (Enter to send, Shift+Enter for new line)"
                     rows="1"
-                    onkeydown="handleKeyPress(event)"
+                    onkeypress="return handleKeyPress(event)"
                 ></textarea>
                 <button class="stop-btn" id="stopBtn" onclick="stopGeneration()">
                     <span>⏹️</span>

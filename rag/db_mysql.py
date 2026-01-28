@@ -11,7 +11,8 @@ SCHEMA_STATEMENTS = [
       title VARCHAR(255),
       upload_date VARCHAR(64),
       path TEXT,
-      notice_id VARCHAR(255)
+      notice_id VARCHAR(255),
+      service_name VARCHAR(255)
     ) ENGINE=InnoDB;
     """,
     """
@@ -62,6 +63,13 @@ def init_db_mysql(conn):
         except Exception:
             pass
         try:
+            cur.execute("SHOW COLUMNS FROM documents LIKE 'service_name'")
+            if cur.fetchone() is None:
+                print("🔧 Adding service_name column to documents table")
+                cur.execute("ALTER TABLE documents ADD COLUMN service_name VARCHAR(255)")
+        except Exception:
+            pass
+        try:
             cur.execute("SHOW COLUMNS FROM chunks LIKE 'token_count'")
             if cur.fetchone() is None:
                 cur.execute("ALTER TABLE chunks ADD COLUMN token_count INT")
@@ -78,8 +86,8 @@ def init_db_mysql(conn):
 def upsert_document_mysql(conn, meta: Dict[str, str]) -> int:
     with conn.cursor() as cur:
         cur.execute(
-            "INSERT INTO documents(ministry, title, upload_date, path, notice_id) VALUES(%s,%s,%s,%s,%s)",
-            (meta.get("ministry"), meta.get("title"), meta.get("upload_date"), meta.get("path"), meta.get("notice_id")),
+            "INSERT INTO documents(ministry, title, upload_date, path, notice_id, service_name) VALUES(%s,%s,%s,%s,%s,%s)",
+            (meta.get("ministry"), meta.get("title"), meta.get("upload_date"), meta.get("path"), meta.get("notice_id"), meta.get("service_name")),
         )
         return cur.lastrowid
 
@@ -118,7 +126,7 @@ def load_all_for_index_mysql(conn) -> Tuple[List[str], List[Dict[str, str]], np.
     with conn.cursor() as cur:
         cur.execute(
             """
-            SELECT c.text, d.ministry, d.title, d.upload_date, d.path, d.notice_id, e.vector
+            SELECT c.text, d.ministry, d.title, d.upload_date, d.path, d.notice_id, d.service_name, e.vector
             FROM chunks c
             JOIN documents d ON d.id = c.document_id
             JOIN embeddings e ON e.chunk_id = c.id
@@ -129,14 +137,15 @@ def load_all_for_index_mysql(conn) -> Tuple[List[str], List[Dict[str, str]], np.
     texts: List[str] = []
     metas: List[Dict[str, str]] = []
     vecs: List[List[float]] = []
-    for text, ministry, title, upload_date, path, notice_id, vec_json in rows:
+    for text, ministry, title, upload_date, path, notice_id, service_name, vec_json in rows:
         texts.append(text)
         metas.append({
             "ministry": ministry,
             "title": title,
             "upload_date": upload_date,
             "path": path,
-            "notice_id": notice_id
+            "notice_id": notice_id,
+            "service_name": service_name
         })
         if isinstance(vec_json, (bytes, bytearray)):
             vec_json = vec_json.decode("utf-8")

@@ -20,6 +20,16 @@ function autoResizeTextarea() {
         this.style.height = 'auto';
         this.style.height = Math.min(this.scrollHeight, 120) + 'px';
     });
+    
+    // Add Enter key handler directly
+    textarea.addEventListener('keydown', function(event) {
+        if (event.key === 'Enter' && !event.shiftKey) {
+            event.preventDefault();
+            event.stopPropagation();
+            sendMessage();
+            return false;
+        }
+    });
 }
 
 // Focus input on load
@@ -28,11 +38,13 @@ function focusInput() {
     if (input) input.focus();
 }
 
-// Handle key press (Ctrl+Enter or Cmd+Enter to send)
+// Handle key press (Enter to send, Shift+Enter for new line)
 function handleKeyPress(event) {
-    if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') {
+    if (event.key === 'Enter' && !event.shiftKey) {
         event.preventDefault();
+        event.stopPropagation();
         sendMessage();
+        return false;
     }
 }
 

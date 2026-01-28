@@ -13,7 +13,8 @@ CREATE TABLE IF NOT EXISTS documents (
   title TEXT,
   upload_date TEXT,
   path TEXT,
-  notice_id TEXT
+  notice_id TEXT,
+  service_name TEXT
 );
 
 CREATE TABLE IF NOT EXISTS chunks (
@@ -54,6 +55,12 @@ def init_db(conn: sqlite3.Connection):
             cur.execute("ALTER TABLE documents ADD COLUMN notice_id TEXT")
             conn.commit()
         
+        # Check and add service_name column
+        if "service_name" not in doc_cols:
+            print("🔧 Adding service_name column to documents table")
+            cur.execute("ALTER TABLE documents ADD COLUMN service_name TEXT")
+            conn.commit()
+        
         # Check and add token_count column
         cur.execute("PRAGMA table_info(chunks)")
         chunk_cols = {row[1] for row in cur.fetchall()}
@@ -74,8 +81,8 @@ def init_db(conn: sqlite3.Connection):
 def upsert_document(conn: sqlite3.Connection, meta: Dict[str, str]) -> int:
     cur = conn.cursor()
     cur.execute(
-        "INSERT INTO documents(ministry, title, upload_date, path, notice_id) VALUES(?,?,?,?,?)",
-        (meta.get("ministry"), meta.get("title"), meta.get("upload_date"), meta.get("path"), meta.get("notice_id")),
+        "INSERT INTO documents(ministry, title, upload_date, path, notice_id, service_name) VALUES(?,?,?,?,?,?)",
+        (meta.get("ministry"), meta.get("title"), meta.get("upload_date"), meta.get("path"), meta.get("notice_id"), meta.get("service_name")),
     )
     conn.commit()
     return cur.lastrowid
@@ -117,7 +124,7 @@ def load_all_for_index(conn: sqlite3.Connection) -> Tuple[List[str], List[Dict[s
     cur = conn.cursor()
     cur.execute(
         """
-        SELECT c.text, d.ministry, d.title, d.upload_date, d.path, d.notice_id, e.vector
+        SELECT c.text, d.ministry, d.title, d.upload_date, d.path, d.notice_id, d.service_name, e.vector
         FROM chunks c
         JOIN documents d ON d.id = c.document_id
         JOIN embeddings e ON e.chunk_id = c.id
@@ -128,14 +135,15 @@ def load_all_for_index(conn: sqlite3.Connection) -> Tuple[List[str], List[Dict[s
     texts: List[str] = []
     metas: List[Dict[str, str]] = []
     vecs: List[List[float]] = []
-    for text, ministry, title, upload_date, path, notice_id, vec_json in rows:
+    for text, ministry, title, upload_date, path, notice_id, service_name, vec_json in rows:
         texts.append(text)
         metas.append({
             "ministry": ministry,
             "title": title,
             "upload_date": upload_date,
             "path": path,
-            "notice_id": notice_id
+            "notice_id": notice_id,
+            "service_name": service_name
         })
         vecs.append(json.loads(vec_json))
     if vecs:

@@ -1,5 +1,6 @@
 from pathlib import Path
 from typing import Dict, List, Tuple
+import json
 import frontmatter
 import sqlite3
 import numpy as np
@@ -122,7 +123,8 @@ def _read_doc(path: Path) -> Tuple[Dict[str, str], str, List[Tuple[str, int]]]:
     elif path.suffix.lower() == ".txt":
         with open(path, encoding="utf-8") as f:
             text = f.read()
-        meta = {"ministry": "Unknown", "title": path.stem, "upload_date": "Unknown", "path": str(path)}
+        from datetime import datetime
+        meta = {"ministry": "Unknown", "title": path.stem, "upload_date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "path": str(path)}
         # Merge external metadata
         if external_metadata:
             meta.update(external_metadata)
@@ -148,10 +150,11 @@ def _read_doc(path: Path) -> Tuple[Dict[str, str], str, List[Tuple[str, int]]]:
             ocr_text, ocr_metadata = _extract_text_from_pdf_ocr(path)
             # OCR returns full text, assign to page 1 for simplicity
             page_texts = [(ocr_text, 1)]
+            from datetime import datetime
             meta = {
                 "ministry": "Unknown",
                 "title": path.stem,
-                "upload_date": "Unknown",
+                "upload_date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                 "path": str(path)
             }
             if ocr_metadata:
@@ -163,10 +166,11 @@ def _read_doc(path: Path) -> Tuple[Dict[str, str], str, List[Tuple[str, int]]]:
         else:
             # Concatenate all page texts
             full_text = "\n".join([pt[0] for pt in page_texts if pt[0]])
+            from datetime import datetime
             meta = {
                 "ministry": "Unknown",
                 "title": path.stem,
-                "upload_date": "Unknown",
+                "upload_date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                 "path": str(path)
             }
             # Merge external metadata (takes precedence)
@@ -177,10 +181,11 @@ def _read_doc(path: Path) -> Tuple[Dict[str, str], str, List[Tuple[str, int]]]:
     
     elif path.suffix.lower() in {".jpg", ".jpeg", ".png", ".tiff", ".bmp"}:
         text, ocr_metadata = _extract_text_from_image(path)
+        from datetime import datetime
         meta = {
             "ministry": "Unknown",
             "title": path.stem,
-            "upload_date": "Unknown",
+            "upload_date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "path": str(path)
         }
         if ocr_metadata:
@@ -191,7 +196,8 @@ def _read_doc(path: Path) -> Tuple[Dict[str, str], str, List[Tuple[str, int]]]:
         
         return meta, text, [(text, 1)]
     else:
-        meta = {"ministry": "Unknown", "title": path.stem, "upload_date": "Unknown", "path": str(path)}
+        from datetime import datetime
+        meta = {"ministry": "Unknown", "title": path.stem, "upload_date": datetime.now().strftime("%Y-%m-%d %H:%M:%S"), "path": str(path)}
         # Merge external metadata
         if external_metadata:
             meta.update(external_metadata)
