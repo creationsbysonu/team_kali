@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="200" height="200" viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg">
+  <!-- Placeholder for Nepal Emblem -->
+  <circle cx="100" cy="100" r="90" fill="#DC143C" stroke="#003893" stroke-width="4"/>
+  <text x="100" y="90" font-family="Arial, sans-serif" font-size="14" fill="white" text-anchor="middle">Nepal</text>
+  <text x="100" y="115" font-family="Arial, sans-serif" font-size="14" fill="white" text-anchor="middle">Emblem</text>
+</svg>
