@@ -43,7 +43,7 @@ class MinistryMiddleware(MiddlewareMixin):
                 ministry = Ministry.objects.get(id=ministry_id, status='active')
                 logger.info(f"[ministry] Set from header: {ministry.slug}")
             except Exception as e:
-                logger.warning(f"[ministry] Invalid ministry ID in header: {ministry_id}")
+                logger.warning(f"[ministry] Invalid ministry ID in header: {ministry_id}, error: {str(e)}")
         
         # 2. Try from JWT token (for ministry admin authentication)
         # IMPORTANT: Don't check is_authenticated here because middleware runs BEFORE DRF JWT auth

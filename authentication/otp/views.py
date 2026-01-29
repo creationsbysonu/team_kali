@@ -26,8 +26,8 @@ logger = logging.getLogger(__name__)
 
 
 class OTPRequestThrottle(AnonRateThrottle):
-    """Custom throttle for OTP requests"""
-    rate = '5/hour'
+    """Custom throttle for OTP requests - 100/hour for development testing"""
+    rate = '100/hour'
 
 
 class OTPRequestView(BaseAPIView):

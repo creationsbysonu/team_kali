@@ -19,7 +19,6 @@ from django.conf import settings
 from authentication.models import CustomUser, OTPLog
 from authentication.serializers import UserSerializer
 from authentication.core.jwt_utils import TokenManager
-from .tasks import send_otp_email
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +30,7 @@ class OTPService:
     OTP_EXPIRY = 300  # 5 minutes
     OTP_LENGTH = 6
     MAX_OTP_ATTEMPTS = 5
-    MAX_OTP_REQUESTS_PER_HOUR = 5
+    MAX_OTP_REQUESTS_PER_HOUR = 100  # Increased for development testing
     RATE_LIMIT_TIMEOUT = 3600  # 1 hour
     
     @staticmethod
@@ -125,10 +124,15 @@ class OTPService:
                 expires_at=timezone.now() + timedelta(seconds=OTPService.OTP_EXPIRY)
             )
             
-            # Send OTP via email asynchronously
-            send_otp_email.delay(email, otp)  # type: ignore[union-attr]
+            # Send OTP via email immediately using thread (faster than Celery)
+            from .tasks import send_otp_email_thread
+            send_otp_email_thread(email, otp)
             
-            logger.info(f"[otp] OTP generated and queued for {email}")
+            logger.info(f"[otp] OTP generated and email sending started for {email}")
+            
+            # In development mode, log OTP for testing
+            if settings.DEBUG:
+                logger.warning(f"[otp] 🔐 DEBUG MODE - OTP for {email}: {otp}")
             
             return True, {
                 "success": True,

@@ -13,10 +13,15 @@ DEBUG = config('DEBUG', default = False, cast=bool)
 
 ALLOWED_HOSTS = config('ALLOWED_HOSTS', default='*', cast=lambda v:[s.strip() for s in v.split(',')])
 
+# Base URL for the server (used for generating absolute URLs)
+# In production, set this to your domain (e.g., https://api.sewasathi.com)
+BASE_URL = config('BASE_URL', default='http://localhost:8000')
+
 
 # Application definition
 
 INSTALLED_APPS = [
+    'daphne',  # ASGI server for WebSocket support (must be first)
     'django.contrib.admin',
     'django.contrib.auth',
     'django.contrib.contenttypes',
@@ -29,6 +34,7 @@ INSTALLED_APPS = [
     'rest_framework',
     'cloudinary_storage',
     'cloudinary',
+    'channels',  # Django Channels for WebSocket support
     
     # Local apps
     'core',
@@ -37,10 +43,25 @@ INSTALLED_APPS = [
     'ministry',  # Ministries belong to Places
     'services',  # Services belong to Ministries
     'staff',     # Staff belong to Services (created by Ministry Admins)
+    'officials',  # Ministry officials (chairperson, secretary, etc.) for progress tracking
+    'attendance',  # Unified attendance tracking for staff and officials
+    'holidays',  # Universal holiday management (all holidays apply to everyone)
+    'queue_management',  # Queue configuration, daily queues, tokens, audit logs, progress tracking
+    'notifications',  # In-app notifications for citizens and staff
+    'mobile_initial',  # Mobile app profile setup for citizens
+    'get_token',  # Citizen token booking flow (Flutter app)
+    'citizen_api',  # Optimized API for Flutter mobile app (v1)
+    
+    # Notice Portal apps
+    'notices',      # Government notices with file attachments
+    'filters',      # Notice filtering service
+    'rag_bridge',   # RAG server communication bridge
+    'citizen_chat', # Citizen chat via WebSocket
 ]
 
 MIDDLEWARE = [
     "corsheaders.middleware.CorsMiddleware",
+    'core.db_middleware.DatabaseConnectionMiddleware',  # Fresh DB connections for Supabase
     'django.middleware.security.SecurityMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
@@ -85,13 +106,18 @@ DATABASES = {
         'OPTIONS': {
             'sslmode': 'require',
             'connect_timeout': 10,
-            'options': '-c statement_timeout=30000', 
+            'options': '-c statement_timeout=30000',
+            'keepalives': 1,
+            'keepalives_idle': 30,
+            'keepalives_interval': 10,
+            'keepalives_count': 5,
         },
-        # Transaction mode optimization
-        'CONN_MAX_AGE': 0,  
-        'CONN_HEALTH_CHECKS': False,  
+        # Supabase Pooler settings - use new connection per request
+        'CONN_MAX_AGE': 0,  # Don't persist connections
+        'CONN_HEALTH_CHECKS': True,
+        'DISABLE_SERVER_SIDE_CURSORS': True,  # Required for PgBouncer
         'TIME_ZONE': 'Asia/Kathmandu',
-        'ATOMIC_REQUESTS': True,  
+        'ATOMIC_REQUESTS': False,
         'AUTOCOMMIT': True, 
     }
 }
@@ -245,6 +271,11 @@ EMAIL_USE_TLS = True
 EMAIL_HOST_USER = config('EMAIL_HOST_USER', default = 'your-gmail@gmail.com')
 EMAIL_HOST_PASSWORD = config('EMAIL_HOST_PASSWORD', default = '')
 
+# Fix for macOS SSL certificate verification issue
+import ssl
+import certifi
+EMAIL_SSL_CONTEXT = ssl.create_default_context(cafile=certifi.where())
+
 
 # cors configurations
 CORS_ALLOW_CREDENTIALS = True
@@ -288,3 +319,40 @@ CORS_ALLOWED_METHODS = [
 CORS_PREFLIGHT_MAX_AGE = 86400
 
 
+# ===================================
+# Django Channels Configuration
+# ===================================
+ASGI_APPLICATION = 'sewa_sathi.asgi.application'
+
+# Channel layers using Redis
+CHANNEL_LAYERS = {
+    'default': {
+        'BACKEND': 'channels_redis.core.RedisChannelLayer',
+        'CONFIG': {
+            'hosts': [(REDIS_HOST, int(REDIS_PORT))],
+            'capacity': 1500,
+            'expiry': 10,
+        },
+    },
+}
+
+
+# ===================================
+# Notice Portal Settings
+# ===================================
+# Allowed file extensions for notice uploads
+ALLOWED_NOTICE_EXTENSIONS = ['pdf', 'png', 'jpg', 'jpeg']
+
+# Maximum file size (10 MB)
+MAX_UPLOAD_SIZE = 10 * 1024 * 1024
+
+
+# ===================================
+# RAG Server Configuration
+# ===================================
+# Base URL for HTTP requests (used by services.py and ws_client.py)
+RAG_SERVER_URL = config('RAG_SERVER_URL', default='http://192.168.1.118:8001')
+RAG_API_KEY = config('RAG_API_KEY', default='')
+RAG_CONNECTION_TIMEOUT = config('RAG_CONNECTION_TIMEOUT', default=10, cast=int)
+RAG_INGEST_TIMEOUT = config('RAG_INGEST_TIMEOUT', default=120, cast=int)
+RAG_MAX_RETRIES = config('RAG_MAX_RETRIES', default=3, cast=int)
