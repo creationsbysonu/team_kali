@@ -64,7 +64,6 @@ class RAGPipeline:
             cached_answer = query_cache.get(question)
             if cached_answer:
                 log_debug("Cache hit", query=question[:50])
-                print(f"\n⚡ CACHE HIT - Returning cached answer")
                 return cached_answer
         
         # Detect context-aware queries (asking about previous answer)
@@ -91,11 +90,7 @@ class RAGPipeline:
             summary_keywords = ['छोट्करी', 'chhotkari', 'संक्षेप', 'brief', 'summary', 'summarize', 'संक्षिप्त']
             is_summary_request = any(kw in question.lower() for kw in summary_keywords)
             
-            if is_summary_request:
-                print(f"\n📝 SUMMARIZATION REQUEST DETECTED")
-                print(f"   Previous Q: {last_question[:80]}...")
-                print(f"   Previous A: {last_answer[:80]}...")
-                
+            if is_summary_request:                
                 # Generate summary using LLM
                 summary_prompt = (
                     f"मूल प्रश्न: {last_question}\n\n"
@@ -110,8 +105,6 @@ class RAGPipeline:
                 
                 # Clean summary
                 summary = re.sub(r'^छोट्करी.*?:', '', summary, flags=re.IGNORECASE).strip()
-                
-                print(f"\n📤 SUMMARY GENERATED: {len(summary)} chars")
                 return summary
         
         # Handle follow-up questions needing context expansion
@@ -119,12 +112,8 @@ class RAGPipeline:
         is_followup = is_context_query and any(kw in question.lower() for kw in followup_keywords)
         
         if is_followup and last_question:
-            print(f"\n🔗 FOLLOW-UP QUESTION DETECTED")
-            print(f"   Combining with previous context: {last_question[:60]}...")
             # Enhance current question with previous context
-            question = f"{last_question} - {question}"
-            print(f"   Enhanced query: {question[:80]}...")
-        
+            question = f"{last_question} - {question}"        
         # Validate input
         if not question or not question.strip():
             return "यस विषयमा आधिकारिक जानकारी उपलब्ध छैन।"
@@ -138,21 +127,11 @@ class RAGPipeline:
         brief_keywords = ['छोट्करी', 'छोट्करीमा', 'संक्षेप', 'संक्षिप्त', 'chhotkari', 'chhotkarimaa', 'sankshep', 'brief', 'shortly', 'संक्षेपमा']
         wants_brief_answer = any(kw in question.lower() for kw in brief_keywords)
         
-        if wants_brief_answer:
-            print(f"\n📝 BRIEF ANSWER REQUESTED (in initial query)")
-        
-        print(f"\n{'='*80}")
-        print(f"{'RAG PIPELINE DEBUG OUTPUT':^80}")
-        print(f"{'='*80}")
-        
         # Normalize query (transliterate if romanized + grammar correction)
         normalized_question = normalize_query(question)
         
-        # Query expansion for better retrieval (generate variations)
+        # Query expansion for better retrieval
         query_variations = [normalized_question]
-        
-        # Extract key entities and concepts for expansion
-        print(f"\n🔍 QUERY EXPANSION:")
         
         # Common synonyms and related terms for better matching
         expansion_map = {
@@ -174,15 +153,7 @@ class RAGPipeline:
         expanded_terms = set()
         for term, synonyms in expansion_map.items():
             if term in query_lower:
-                expanded_terms.update([term] + synonyms[:2])  # Add top 2 synonyms
-                print(f"   • Found '{term}' → Adding: {', '.join(synonyms[:2])}")
-        
-        # If we found expandable terms, create an expanded query
-        if expanded_terms:
-            # Keep original query as primary, but log expansion for future hybrid search
-            print(f"   ✓ Expanded with {len(expanded_terms)} related terms")
-        else:
-            print(f"   • No common terms to expand")
+                expanded_terms.update([term] + synonyms[:2])
         
         # For LLM prompt, get the grammar-corrected version WITHOUT particle removal
         from rag.transliterate import correct_nepali_grammar, romanized_to_devanagari, is_romanized_nepali, translate_english_terms, extract_and_preserve_english, restore_preserved_text
@@ -193,33 +164,16 @@ class RAGPipeline:
             modified_text, preserved = extract_and_preserve_english(llm_question)
             llm_question = romanized_to_devanagari(modified_text)
             llm_question = restore_preserved_text(llm_question, preserved)
-        llm_question = correct_nepali_grammar(llm_question)  # Grammar corrected but particles kept
-        
-        print(f"\n📥 INPUT (Original Question):")
-        print(f"   {question}")
-        
-        print(f"\n🔄 NORMALIZED for Search (particles removed):")
-        print(f"   {normalized_question}")
-        
-        print(f"\n✨ CORRECTED for LLM (grammar fixed, particles kept):")
-        print(f"   {llm_question}")
-        
-        if question != normalized_question:
-            print(f"\n✓ Romanization applied: YES")
-        else:
-            print(f"\n✓ Romanization applied: NO (already in Devanagari)")
+        llm_question = correct_nepali_grammar(llm_question)
         
         # Detect if this is a comprehensive query needing more chunks
         comprehensive_indicators = ['सबै', 'सब', 'सम्पूर्ण', 'पूर्ण', 'के के', 'कति', 'सबै ', 'all', 'complete', 'full', 'list']
         is_comprehensive = any(indicator in question.lower() or indicator in normalized_question.lower() for indicator in comprehensive_indicators)
         
         if is_comprehensive:
-            print(f"\n🔍 COMPREHENSIVE QUERY DETECTED - Retrieving extra chunks")
-            retrieval_multiplier = 3  # 6 * 3 = 18 chunks
+            retrieval_multiplier = 3
         else:
             retrieval_multiplier = 1
-        
-        print(f"\n{'='*80}")
         
         # Multi-query search for better retrieval
         all_results = []
@@ -260,20 +214,14 @@ class RAGPipeline:
         all_results.sort(key=lambda x: x['score'], reverse=True)
         retrieved = all_results[:expanded_top_k]
         
-        # === HYBRID RERANKING (Semantic + Lexical) ===
-        print(f"\n🔄 HYBRID RERANKING:")
-        print(f"   Initial results: {len(retrieved)}")
-        
+        # === HYBRID RERANKING (Semantic + Lexical) ===        
         # Extract query terms for lexical matching
         query_terms = set(normalized_question.lower().split())
         # Also extract terms from original question
         query_terms.update(question.lower().split())
         
         # Remove very short terms (noise)
-        query_terms = {t for t in query_terms if len(t) > 2}
-        
-        print(f"   Key query terms: {', '.join(list(query_terms)[:8])}")
-        
+        query_terms = {t for t in query_terms if len(t) > 2}        
         # Rerank each chunk with hybrid score
         for r in retrieved:
             # Safe text extraction with None check
@@ -331,14 +279,11 @@ class RAGPipeline:
         retrieved.sort(key=lambda x: x['hybrid_score'], reverse=True)
         
         # Show top 3 reranking results
-        print(f"\n   Top 3 after reranking:")
         for i, r in enumerate(retrieved[:3], 1):
             sem = r.get('semantic_score', 0)
             lex = r.get('lexical_score', 0)
             hyb = r.get('hybrid_score', 0)
-            title = r.get('meta', {}).get('title', 'Unknown')[:30]
-            print(f"   [{i}] {title}: semantic={sem:.3f}, lexical={lex:.3f} → hybrid={hyb:.3f}")
-        
+            title = r.get('meta', {}).get('title', 'Unknown')[:30]        
         # Apply recency boost: prioritize recent documents
         from datetime import datetime
         for r in retrieved:
@@ -371,11 +316,6 @@ class RAGPipeline:
         # Filter by relevance threshold to avoid completely irrelevant chunks
         retrieved = [r for r in retrieved if r['score'] >= settings.relevance_threshold]
         
-        print(f"\n🔍 SEARCH RESULTS: Retrieved {len(retrieved)} chunks (threshold: {settings.relevance_threshold})")
-        recent_count = sum(1 for r in retrieved if r.get('recency_boost', False))
-        if recent_count > 0:
-            print(f"   ⏰ {recent_count} recent documents boosted (within 90 days)")
-        
         if not retrieved:
             # Detect if asking "who is" about a government position
             person_query_patterns = [
@@ -399,9 +339,7 @@ class RAGPipeline:
             is_person_query = any(pattern in q_lower for pattern in person_query_patterns)
             is_about_position = any(pos in q_lower for pos in government_positions)
             
-            if is_person_query and is_about_position:
-                print(f"\n👤 PERSON-QUERY DETECTED (asking 'who is' about government position)")
-                
+            if is_person_query and is_about_position:                
                 # Extract the position being asked about
                 position_asked = "यस पद"
                 for pos in government_positions:
@@ -420,24 +358,16 @@ class RAGPipeline:
                     f"• नियुक्ति प्रक्रिया\n\n"
                     f"बारे जान्न चाहनुहुन्छ भने, कृपया सोध्नुहोस्! 😊"
                 )
-                
-                print(f"\n📤 OUTPUT (Helpful clarification provided):")
-                print(f"   {final_answer[:150]}...")
-                print(f"\n{'='*80}\n")
                 return final_answer
             
             # Default "not found" response for other queries
             final_answer = "यो जानकारी उपलब्ध दस्तावेजमा छैन।"
-            print(f"\n📤 OUTPUT (Sent to Frontend):")
             print(f"   {final_answer}")
-            print(f"\n{'='*80}\n")
             return final_answer
         
         # Show similarity scores and content for debugging
-        print(f"\n📊 CHUNK DETAILS:")
         for i, r in enumerate(retrieved, 1):
             print(f"\n   [{i}] Score: {r['score']:.4f} | Source: {r['meta'].get('title', 'Unknown')}")
-            print(f"       Preview: {r['text'][:120]}...")
                 # Smart filtering for comprehensive queries
         if is_comprehensive:
             # Detect if asking about constitutional/fundamental topics
@@ -446,16 +376,13 @@ class RAGPipeline:
             
             if is_constitutional:
                 # Filter out press releases and keep only constitution/law documents
-                print(f"\n\U0001f4dc Constitutional query detected - filtering documents")
                 constitution_chunks = [r for r in retrieved if r['meta'].get('type') in ['constitution', 'law', 'act']]
                 
                 # If we have enough constitution chunks, use only those
                 if len(constitution_chunks) >= 12:
                     retrieved = constitution_chunks
-                    print(f"   ✓ Using {len(retrieved)} constitution/law chunks only")
-                else:
-                    print(f"   ⚠ Only {len(constitution_chunks)} constitution chunks found, using all {len(retrieved)}")
-                # Build context with chunk numbers for better clarity
+        
+        # Build context with chunk numbers for better clarity
         # Group chunks by document type for better organization
         constitution_chunks = []
         law_chunks = []
@@ -607,9 +534,9 @@ class RAGPipeline:
         context_text = "\n\n".join(context_sections)
         sources_text = "\n".join(sources_lines)
 
-        # Build ChatGPT-style prompt with enhanced reasoning instructions
+        # Build prompt with enhanced reasoning instructions
         system_message = (
-            "तपाईं नेपाल सरकारको विशेषज्ञ AI सहायक हुनुहुन्छ जसले ChatGPT जस्तै गहिरो सोच र विश्लेषण गर्छ।\n\n"
+            "तपाईं नेपाल सरकारको विशेषज्ञ AI सहायक हुनुहुन्छ जसले गहिरो सोच र विश्लेषण गर्छ।\n\n"
             "🧠 **तपाईंको सोच प्रक्रिया (यो देखाउनु पर्दैन, तर पालना गर्नुहोस्):**\n"
             "1. प्रश्न के सोधिएको छ? (मुख्य अवधारणा, निकाय, र सन्दर्भ पहिचान गर्नुहोस्)\n"
             "2. कुन दस्तावेजमा के जानकारी छ? (प्रत्येक chunk को सम्बद्धता जाँच्नुहोस्)\n"
@@ -663,7 +590,7 @@ class RAGPipeline:
                 "माथिको दस्तावेजको आधारमा प्रश्नको सटीक र विस्तृत उत्तर नेपालीमा दिनुहोस्।"
             )
 
-        # ChatGPT-style structured prompt
+        # Structured prompt
         prompt = (
             f"{system_message}\n\n"
             f"{'='*60}\n"
@@ -676,31 +603,21 @@ class RAGPipeline:
         )
         
         print(f"\n{'='*80}")
-        print(f"⚙️  SENDING TO LLM ")
-        answer_body = self.generator.generate(prompt)
-        
-        print(f"\n🤖 RAW LLM RESPONSE:")
-        print(f"   {answer_body[:200]}..." if len(answer_body) > 200 else f"   {answer_body}")
-        
+        answer_body = self.generator.generate(prompt)        
         # Clean up answer - remove instruction echoes and nonsense
         answer_body = answer_body.strip()
         
         # Check if output is in romanized form (has Latin diacritics)
         romanized_chars = ['ā', 'ī', 'ū', 'ṛ', 'ṃ', 'ṅ', 'ñ', 'ṭ', 'ḍ', 'ṇ', 'ś', 'ṣ']
         if any(char in answer_body for char in romanized_chars):
-            print(f"⚠️  WARNING: Romanized output detected, rejecting")
             answer_body = "यो जानकारी उपलब्ध दस्तावेजमा छैन।"
             final_answer = answer_body  # No sources for error case
-            print(f"\n📤 OUTPUT (Sent to Frontend):")
             print(f"   {answer_body}")
-            print(f"\n{'='*80}\n")
             return final_answer
         
         # Remove "उत्तर:" label if LLM echoed it
         if answer_body.lower().startswith("उत्तर:"):
-            answer_body = answer_body[6:].strip()
-            print(f"🧹 Removed 'उत्तर:' label")
-        
+            answer_body = answer_body[6:].strip()        
         # Remove system role echoes at the very beginning
         system_role_patterns = [
             r'^नेपाल सरकारी कागजातको विज्ञ सहायक हुनुहुन्छ[।\.\s]+',
@@ -710,14 +627,11 @@ class RAGPipeline:
         ]
         for pattern in system_role_patterns:
             if re.match(pattern, answer_body, re.IGNORECASE):
-                answer_body = re.sub(pattern, '', answer_body, flags=re.IGNORECASE).strip()
-                print(f"🧹 Removed system role echo")
-        
+                answer_body = re.sub(pattern, '', answer_body, flags=re.IGNORECASE).strip()        
         # Remove English translations in parentheses
         # Pattern: (Translation: ...)
         if '(Translation:' in answer_body or '(translation:' in answer_body.lower():
             answer_body = re.sub(r'\(Translation:.*?\)', '', answer_body, flags=re.IGNORECASE | re.DOTALL)
-            print(f"🧹 Removed English translation")
         # Pattern: (Any English text in parentheses)
         answer_body = re.sub(r'\([a-zA-Z\s,\.;:]+\)\.?', '', answer_body)
         
@@ -748,9 +662,7 @@ class RAGPipeline:
         ]
         for pattern in trailing_question_patterns:
             if re.search(pattern, answer_body):
-                answer_body = re.sub(pattern, '।', answer_body).strip()
-                print(f"🧹 Removed trailing question echo")
-        
+                answer_body = re.sub(pattern, '।', answer_body).strip()        
         answer_body = answer_body.strip()
         
         # Remove instruction echoes and meta-commentary
@@ -787,14 +699,12 @@ class RAGPipeline:
             meta_labels = ['संस्थाको कार्य बारे:', 'ठेगाना/स्थान:', 'उद्देश्य:', 
                           'नोट:', 'महत्वपूर्ण:', 'जानकारी:', 'विवरण:']
             if any(line_stripped.startswith(label) for label in meta_labels):
-                print(f"🧹 Removed meta-label line: {line_stripped[:60]}...")
                 continue
             
             # Check if line contains any instruction pattern
             contains_instruction = False
             for pattern in instruction_patterns:
                 if pattern.lower() in line_stripped.lower():
-                    print(f"🧹 Removed instruction echo: {line_stripped[:60]}...")
                     contains_instruction = True
                     break
             if not contains_instruction:
@@ -833,16 +743,13 @@ class RAGPipeline:
                 overlap = len(question_words & sent_words)
                 overlap_ratio = overlap / len(question_words)
                 if overlap_ratio > 0.7:
-                    print(f"🧹 Removed question echo: {sent[:80]}...")
                     continue
             
             # Skip sentences with excessive garbage transliteration (random consonant clusters)
             # Pattern like: षांबईडःआण (should be संविधान)
             garbage_chars = ['ष', 'ड़', 'ः', 'ॅ', 'ँ', 'ऑ']
             garbage_count = sum(1 for char in sent if char in garbage_chars)
-            if len(sent) > 0 and garbage_count / len(sent) > 0.15:
-                print(f"🧹 Removed garbage transliteration: {sent[:60]}...")
-                continue
+            if len(sent) > 0 and garbage_count / len(sent) > 0.15:                continue
             
             clean_sentences.append(sent)
         
@@ -856,8 +763,6 @@ class RAGPipeline:
                 if sent_normalized != prev_sent_normalized:
                     unique_sentences.append(sent)
                     prev_sent_normalized = sent_normalized
-                else:
-                    print(f"🧹 Removed duplicate sentence: {sent[:60]}...")
             
             answer_body = '। '.join(unique_sentences)
             if answer_body and not answer_body.endswith('।'):
@@ -870,18 +775,11 @@ class RAGPipeline:
                         'regarding', 'usage', 'regulation', 'note', 'if', 'there', 'is', 
                         'no', 'available', 'this', 'document', 'would']
         answer_lower = answer_body.lower()
-        english_word_count = sum(1 for word in english_words if word in answer_lower)
-        
-        print(f"\n🔍 English words detected: {english_word_count}")
-        
+        english_word_count = sum(1 for word in english_words if word in answer_lower)        
         # If too many English words detected, reject and return fallback
-        if english_word_count >= 5:
-            print(f"⚠️  WARNING: English response rejected (threshold: 5)")
-            answer_body = "यो जानकारी उपलब्ध दस्तावेजमा छैन।"
+        if english_word_count >= 5:            answer_body = "यो जानकारी उपलब्ध दस्तावेजमा छैन।"
         
-        # === ANSWER VALIDATION AGAINST SOURCES ===
-        print(f"\n✅ VALIDATING ANSWER AGAINST SOURCE CHUNKS:")
-        
+        # === ANSWER VALIDATION AGAINST SOURCES ===        
         # Extract key claims from the answer (sentences with specific facts)
         answer_sentences = [s.strip() for s in answer_body.split('।') if len(s.strip()) > 10]
         
@@ -921,10 +819,7 @@ class RAGPipeline:
         # Verify at least 60% of key terms appear in chunks
         if key_terms_in_answer:
             terms_found = sum(1 for term in key_terms_in_answer if term in all_chunk_text)
-            coverage = terms_found / len(key_terms_in_answer) if key_terms_in_answer else 0
-            
-            print(f"   • Key terms coverage: {coverage:.1%} ({terms_found}/{len(key_terms_in_answer)})")
-            
+            coverage = terms_found / len(key_terms_in_answer) if key_terms_in_answer else 0            
             if coverage < 0.6:
                 print(f"   ⚠️  WARNING: Low coverage - answer may not be well-supported")
                 validation_passed = False
@@ -936,11 +831,7 @@ class RAGPipeline:
             print(f"   ⚠️  Answer validation FAILED - some claims may not be well-supported")
             print(f"   💡 Consider: Answer might be hallucinated or inferred")
         
-            final_answer = answer_body  # No sources for error case
-            print(f"\n📤 OUTPUT (Sent to Frontend):")
-            print(f"   {answer_body}")
-            print(f"\n{'='*80}\n")
-            return final_answer
+            final_answer = answer_body  # No sources for error case            print(f"   {answer_body}")            return final_answer
         
         # Remove lines that are just repetitive nonsense
         lines = answer_body.split('\n')
@@ -952,12 +843,10 @@ class RAGPipeline:
                 continue
             # Skip duplicate lines
             if line == prev_line:
-                print(f"🧹 Removed duplicate line: {line[:60]}...")
                 continue
             # Skip lines with excessive repetition of same words
             words = line.split()
             if len(words) > 3 and len(set(words)) / len(words) < 0.4:  # Too repetitive
-                print(f"🧹 Removed repetitive line: {line[:60]}...")
                 continue
             clean_lines.append(line)
             prev_line = line
@@ -1061,12 +950,6 @@ class RAGPipeline:
             final_answer = answer_body
         
         print(f"\n✨ CLEANED ANSWER:")
-        print(f"   {answer_body[:200]}..." if len(answer_body) > 200 else f"   {answer_body}")
-        
-        print(f"\n📤 FINAL OUTPUT (Sent to Frontend):")
-        print(f"   Length: {len(final_answer)} characters")
         print(f"   Sources shown: {'Yes' if should_show_sources else 'No'} ({len(sources_lines)} available)")
-        
-        print(f"\n{'='*80}\n")
         
         return final_answer

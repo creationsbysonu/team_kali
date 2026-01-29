@@ -144,7 +144,7 @@ class GeminiGenerator(GenerativeModel):
                 HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
             }
             
-            # ChatGPT-style system instruction with clear role and capabilities
+            # System instruction with clear role and capabilities
             system_instruction = (
                 'तपाईं नेपाल सरकारको उच्च-दक्ष AI सहायक हुनुहुन्छ जसले सरकारी दस्तावेजबाट जानकारी निकाल्नमा विशेषज्ञता राख्नुहुन्छ।\\n\\n'
                 '### तपाईंको क्षमताहरू:\\n'
