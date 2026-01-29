@@ -1,0 +1,72 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+venv/
+ENV/
+env/
+
+# Internal Notes (DO NOT COMMIT)
+.model_info
+*_REAL_*.md
+*_ORIGINAL.*
+*_INTERNAL.*
+
+# Model files (too large for git)
+*.pth
+*.h5
+*.onnx
+*.pb
+models/*.pth
+models/*.bin
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Project specific
+uploads/*
+!uploads/.gitkeep
+temp_uploads/*
+!temp_uploads/.gitkeep
+*.log
+.env
+credentials.json
+google-credentials.json
+
+# Old files (moved to src/)
+video_moderator.py
+vision_moderator.py
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+
+# Documentation
+docs/_build/

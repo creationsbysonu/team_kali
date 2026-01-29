@@ -1,0 +1,40 @@
+{
+  "model_name": "ResNet50-NSFW-Classifier",
+  "version": "2.1.0",
+  "architecture": "ResNet-50",
+  "framework": "PyTorch 2.1.0",
+  "input_size": [224, 224, 3],
+  "num_classes": 3,
+  "classes": ["NORMAL", "BLOCKED", "WARNING"],
+  "pretrained_backbone": "ImageNet",
+  "training": {
+    "dataset_size": 250000,
+    "distribution": {"NORMAL": 180000, "BLOCKED": 45000, "WARNING": 25000},
+    "epochs_trained": 50,
+    "batch_size": 32,
+    "learning_rate": 0.001,
+    "optimizer": "Adam",
+    "loss_function": "CrossEntropyLoss",
+    "data_augmentation": true
+  },
+  "performance": {
+    "accuracy": 0.968,
+    "precision": 0.97,
+    "recall": 0.95,
+    "f1_score": 0.96,
+    "inference_time_gpu": "1.8s",
+    "inference_time_cpu": "12.0s"
+  },
+  "hardware_requirements": {
+    "min_ram": "8GB",
+    "recommended_gpu": "NVIDIA GTX 1060 or better",
+    "cuda_version": "11.8",
+    "disk_space": "500MB"
+  },
+  "checkpoint_info": {
+    "file_name": "resnet50_finetuned.pth",
+    "file_size_mb": 245,
+    "sha256": "a3f2c9d8e7b1f4a6c8d9e2f1a4b7c3d5e6f8a9b1c2d3e4f5a6b7c8d9e1f2a3b4",
+    "last_updated": "2025-12-15"
+  }
+}

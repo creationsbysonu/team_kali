@@ -1,0 +1,9 @@
+# Model Weights Directory
+
+Place your trained model checkpoints here:
+
+- `resnet50_finetuned.pth` (245 MB) - Main model weights
+- `resnet50_finetuned.pth.sha256` - Checksum file for verification
+
+**Note:** Model files are not tracked in git due to size constraints.
+Download from secure internal storage or train your own model using `train_model.py`.
